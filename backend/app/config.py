@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     SQUAD_API_BASE_URL: str = "https://sandbox-api-d.squadco.com"
     SQUAD_SECRET_KEY: str = ""
     SQUAD_MOCK_MODE: bool = True
-    PAYMENT_CALLBACK_URL: str = "http://localhost:3000/payments/callback"
+    PAYMENT_CALLBACK_URL: str = "http://localhost:3000/"
     PAYMENT_SECURITY_QUESTION: str = "What is your security answer?"
     PAYMENT_SECURITY_ANSWER: str = ""
     PAYMENT_SECURITY_ANSWER_HASH: str = ""

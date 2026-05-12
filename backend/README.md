@@ -80,7 +80,7 @@ Example initiate payload:
   "customer_name": "Ada Lovelace",
   "security_answer": "your_dev_answer",
   "currency": "NGN",
-  "callback_url": "http://localhost:3000/payments/callback",
+  "callback_url": "http://localhost:3000/",
   "payment_channels": ["card", "bank", "ussd", "transfer"],
   "metadata": {
     "order_id": "ORD-1001"
