@@ -5,3 +5,6 @@ uploads/*
 __pycache__/
 .pytest_cache/
 .venv/
+logs/*.log
+nlp_demo_latest.log
+uvicorn.*.log

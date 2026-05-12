@@ -15,6 +15,7 @@ class Vendor(Base):
     email = Column(String, nullable=False, index=True)
     phone = Column(String, nullable=False)
     address = Column(String, nullable=False)
+    director_name = Column(String, nullable=True)
     tier = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default="pending", index=True)
     squad_merchant_id = Column(String, nullable=True, index=True)
@@ -29,3 +30,4 @@ class Vendor(Base):
     documents = relationship("Document", back_populates="vendor", cascade="all, delete-orphan")
     verifications = relationship("Verification", back_populates="vendor", cascade="all, delete-orphan")
     flags = relationship("Flag", back_populates="vendor", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="vendor", cascade="all, delete-orphan")

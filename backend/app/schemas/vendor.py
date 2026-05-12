@@ -24,6 +24,7 @@ class VendorCreate(BaseModel):
     email: EmailStr
     phone: str
     address: str
+    director_name: Optional[str] = None
     tier: TierEnum
 
 
@@ -37,6 +38,7 @@ class VendorOut(BaseModel):
     id: str
     business_name: str
     rc_number: Optional[str] = None
+    director_name: Optional[str] = None
     tier: TierEnum
     status: str
     squad_merchant_id: Optional[str] = None

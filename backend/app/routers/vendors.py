@@ -6,7 +6,7 @@ from app.database import SessionLocal, get_db
 from app.models.vendor import Vendor
 from app.schemas.vendor import TierEnum, VendorCreate, VendorOut, VendorStatusUpdate
 from app.services.scorer import run_verification
-from app.utils.logger import logger
+from app.utils.logger import db_log, logger
 
 
 router = APIRouter()
@@ -38,13 +38,16 @@ def create_vendor(
         email=str(payload.email),
         phone=payload.phone,
         address=payload.address,
+        director_name=payload.director_name or "",
         tier=payload.tier.value,
         status="pending",
         created_at=dt.datetime.now(dt.UTC),
     )
+    db_log(f"→ Saving vendor: {vendor.business_name} | tier: {vendor.tier} | id: {vendor.id}")
     db.add(vendor)
     db.commit()
     db.refresh(vendor)
+    db_log(f"✓ Vendor saved — id: {vendor.id}")
     background_tasks.add_task(run_verification_for_vendor_id, vendor.id)
     return vendor
 
