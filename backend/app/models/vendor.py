@@ -29,3 +29,4 @@ class Vendor(Base):
     documents = relationship("Document", back_populates="vendor", cascade="all, delete-orphan")
     verifications = relationship("Verification", back_populates="vendor", cascade="all, delete-orphan")
     flags = relationship("Flag", back_populates="vendor", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="vendor", cascade="all, delete-orphan")

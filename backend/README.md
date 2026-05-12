@@ -54,9 +54,53 @@ The app creates tables automatically on startup for the demo flow.
 | POST | `/api/v1/squad/create-merchant` | Create merchant after approval with `{ "vendor_id": "..." }` |
 | POST | `/api/v1/squad/create-merchant/{vendor_id}` | Path-based shortcut for merchant creation |
 | GET | `/api/v1/squad/merchant/{vendor_id}` | Check merchant status |
+| POST | `/api/payments/initiate` | Create payment ref for the current vendor, require security answer, call Squad initiate, return checkout URL |
+| GET | `/api/payments/{transaction_ref}` | Verify and return current vendor's payment status |
+| GET | `/api/payments/` | List current vendor's local payment history, optionally filtered by `status` |
+| GET | `/api/payments/squad-history` | Query current vendor's Squad transaction history by `reference`, with `start_date`, `end_date`, `currency`, `page`, and `perpage` |
+| POST | `/api/webhooks/squad` | Validate Squad HMAC webhook, update payment status, run fraud monitoring |
 | GET | `/api/v1/dashboard/stats` | Dashboard totals and score averages |
 | GET | `/api/v1/dashboard/queue` | Pending/review queue |
 | GET | `/api/v1/dashboard/recent` | Recent verification activity |
+
+## Squad Payments
+
+Payment API routes require the current vendor header:
+
+```http
+X-Vendor-Id: vendor_uuid_here
+```
+
+Example initiate payload:
+
+```json
+{
+  "amount": 250000,
+  "customer_email": "customer@example.com",
+  "customer_name": "Ada Lovelace",
+  "security_answer": "your_dev_answer",
+  "currency": "NGN",
+  "callback_url": "http://localhost:3000/payments/callback",
+  "payment_channels": ["card", "bank", "ussd", "transfer"],
+  "metadata": {
+    "order_id": "ORD-1001"
+  },
+  "pass_charge": false
+}
+```
+
+Set these environment values when leaving mock mode:
+
+```env
+SQUAD_MOCK_MODE=false
+SQUAD_SECRET_KEY=sandbox_sk_or_live_sk
+SQUAD_API_BASE_URL=https://sandbox-api-d.squadco.com
+PAYMENT_CALLBACK_URL=https://your-client.example/payments/callback
+PAYMENT_SECURITY_QUESTION=Your configured security question
+PAYMENT_SECURITY_ANSWER_HASH=sha256_hex_of_the_expected_answer
+```
+
+`PAYMENT_SECURITY_ANSWER` is also supported for local development, but prefer the hash in shared environments.
 
 ## Test
 
