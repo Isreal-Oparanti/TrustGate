@@ -3,5 +3,6 @@ from app.models.flag import Flag
 from app.models.payment import Payment
 from app.models.vendor import Vendor
 from app.models.verification import Verification
+from app.models.wallet import Wallet
 
-__all__ = ["Document", "Flag", "Payment", "Vendor", "Verification"]
+__all__ = ["Document", "Flag", "Payment", "Vendor", "Verification", "Wallet"]

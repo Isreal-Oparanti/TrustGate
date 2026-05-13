@@ -1,6 +1,6 @@
 # TrustGate Backend
 
-TrustGate is a FastAPI KYB intelligence layer for Squad-style merchant onboarding. It scores vendors, stores verification evidence, exposes dashboard routes, and mocks Squad merchant creation until real credentials are available.
+TrustGate is a FastAPI platform layer for onboarding vendors under one Squad business, giving each vendor payment collection, transfer, and virtual wallet capabilities.
 
 ## Quick Start
 
@@ -39,36 +39,49 @@ The app creates tables automatically on startup for the demo flow.
 
 | Method | Path | What it does |
 | --- | --- | --- |
-| POST | `/api/v1/vendors/` | Create a vendor application |
-| GET | `/api/v1/vendors/` | List vendors, with optional `status` and `tier` filters |
-| GET | `/api/v1/vendors/{vendor_id}` | Get one vendor |
-| PATCH | `/api/v1/vendors/{vendor_id}/status` | Compliance approval/block/review |
-| DELETE | `/api/v1/vendors/{vendor_id}` | Delete a vendor |
-| POST | `/api/v1/verify/{vendor_id}` | Run OCR, NLP, identity, anomaly, and trust scoring |
-| GET | `/api/v1/verify/{vendor_id}` | Get latest verification |
-| GET | `/api/v1/verify/{vendor_id}/flags` | List individual AI flags |
-| POST | `/api/v1/verify/{vendor_id}/rerun` | Re-run verification |
-| POST | `/api/v1/documents/upload/{vendor_id}` | Upload PDF/image/TXT documents |
-| GET | `/api/v1/documents/{vendor_id}` | List uploaded documents |
-| POST | `/api/v1/squad/webhook` | Receive Squad-like events |
-| POST | `/api/v1/squad/create-merchant` | Create merchant after approval with `{ "vendor_id": "..." }` |
-| POST | `/api/v1/squad/create-merchant/{vendor_id}` | Path-based shortcut for merchant creation |
-| GET | `/api/v1/squad/merchant/{vendor_id}` | Check merchant status |
+| POST | `/api/vendors/` | Create a vendor under your platform as a Squad sub-merchant |
+| GET | `/api/vendors/me` | Get current vendor by `X-Vendor-Id` |
+| POST | `/api/wallets` | Create current vendor's Squad business virtual account |
+| GET | `/api/wallets/me` | Get current vendor's wallet |
+| GET | `/api/wallets/me/transactions` | Get current vendor wallet transactions |
 | POST | `/api/payments/initiate` | Create payment ref for the current vendor, require security answer, call Squad initiate, return checkout URL |
 | GET | `/api/payments/{transaction_ref}` | Verify and return current vendor's payment status |
 | GET | `/api/payments/` | List current vendor's local payment history, optionally filtered by `status` |
-| GET | `/api/payments/squad-history` | Query current vendor's Squad transaction history by `reference`, with `start_date`, `end_date`, `currency`, `page`, and `perpage` |
 | POST | `/api/webhooks/squad` | Validate Squad HMAC webhook, update payment status, run fraud monitoring |
-| GET | `/api/v1/dashboard/stats` | Dashboard totals and score averages |
-| GET | `/api/v1/dashboard/queue` | Pending/review queue |
-| GET | `/api/v1/dashboard/recent` | Recent verification activity |
+| POST | `/api/transfers/account-lookup` | Confirm a recipient account before transfer |
+| POST | `/api/transfers` | Send money from your Squad wallet to a bank account |
+| POST | `/api/transfers/requery` | Re-query a transfer status |
 
 ## Squad Payments
+
+Create a vendor/sub-merchant first:
+
+```http
+POST /api/vendors/
+```
+
+```json
+{
+  "business_name": "Demo Vendor Ltd",
+  "rc_number": "RC-DEMO-001",
+  "bvn": "12345678901",
+  "nin": "10987654321",
+  "email": "demo.vendor@example.com",
+  "phone": "08012345678",
+  "address": "12 Marina Road, Lagos",
+  "settlement_account_name": "Demo Vendor Ltd",
+  "settlement_account_number": "0123456789",
+  "settlement_bank_code": "058",
+  "settlement_bank": "GTBank",
+  "payment_security_question": "What is your demo payment security answer?",
+  "payment_security_answer": "demo123"
+}
+```
 
 Payment API routes require the current vendor header:
 
 ```http
-X-Vendor-Id: vendor_uuid_here
+X-Vendor-Id: vendor_id_returned_from_sub_merchant_creation
 ```
 
 Example initiate payload:
@@ -95,6 +108,7 @@ Set these environment values when leaving mock mode:
 SQUAD_MOCK_MODE=false
 SQUAD_SECRET_KEY=sandbox_sk_or_live_sk
 SQUAD_API_BASE_URL=https://sandbox-api-d.squadco.com
+SQUAD_PARENT_BUSINESS_ID=SBHDTWL6SR
 PAYMENT_CALLBACK_URL=https://your-client.example/payments/callback
 PAYMENT_SECURITY_QUESTION=Your configured security question
 PAYMENT_SECURITY_ANSWER_HASH=sha256_hex_of_the_expected_answer

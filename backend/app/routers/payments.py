@@ -16,11 +16,10 @@ from app.schemas.squad import (
 )
 from app.services.squad_api import (
     initiate_payment,
-    query_squad_transactions,
     run_payment_fraud_monitoring,
     validate_squad_webhook_signature,
     verify_payment,
-    verify_security_answer,
+    verify_vendor_security_answer,
 )
 
 
@@ -61,13 +60,28 @@ def _extract_squad_data(response: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_payment_from_squad(payment: Payment, squad_data: dict[str, Any], squad_response: dict[str, Any]):
-    payment.status = _status_from_squad(squad_data.get("transaction_status"))
+    payment.status = _status_from_squad(squad_data.get("transaction_status") or squad_data.get("status"))
     payment.squad_gateway_ref = squad_data.get("gateway_ref") or squad_data.get("gateway_transaction_ref")
     payment.squad_transaction_type = squad_data.get("transaction_type")
     payment.squad_response = squad_response
     fraud_status, fraud_notes = run_payment_fraud_monitoring(payment, squad_data)
     payment.fraud_status = fraud_status
     payment.fraud_notes = fraud_notes
+
+
+def _verify_payment_best_effort(transaction_ref: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    try:
+        return verify_payment(transaction_ref), None
+    except HTTPException as exc:
+        return None, {
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+        }
+    except Exception as exc:
+        return None, {
+            "status_code": 502,
+            "detail": {"message": f"Squad verify payment failed: {exc}"},
+        }
 
 
 @router.post("/initiate", response_model=PaymentInitiateResponse, status_code=status.HTTP_201_CREATED)
@@ -79,14 +93,18 @@ def initiate_customer_payment(
     vendor = _get_vendor_or_404(db, current_vendor.id)
     if vendor.status != "approved":
         raise HTTPException(status_code=409, detail="Vendor must be approved before accepting payments")
-    if not verify_security_answer(payload.security_answer):
+    if not vendor.squad_account_id:
+        raise HTTPException(status_code=409, detail="Vendor must be activated as a Squad sub-merchant first")
+    if not verify_vendor_security_answer(vendor, payload.security_answer):
         raise HTTPException(status_code=403, detail="Security question answer is invalid")
 
-    transaction_ref = f"TG-{uuid.uuid4().hex[:20].upper()}"
+    transaction_ref = f"TG{uuid.uuid4().hex[:20].upper()}"
     metadata = {
         **payload.metadata,
+        "platform_business_id": settings.SQUAD_PARENT_BUSINESS_ID,
         "vendor_id": vendor.id,
         "vendor_business_name": vendor.business_name,
+        "squad_sub_merchant_id": vendor.squad_account_id,
     }
     squad_payload = {
         "amount": payload.amount,
@@ -99,14 +117,18 @@ def initiate_customer_payment(
         "payment_channels": [channel.value for channel in payload.payment_channels],
         "metadata": metadata,
         "pass_charge": payload.pass_charge,
+        "sub_merchant_id": vendor.squad_account_id,
     }
 
     try:
         squad_response = initiate_payment(squad_payload)
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Squad initiate payment failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail={"message": f"Squad initiate payment failed: {exc}"}) from exc
 
     squad_data = _extract_squad_data(squad_response)
+    squad_verification, squad_verification_error = _verify_payment_best_effort(transaction_ref)
     payment = Payment(
         id=str(uuid.uuid4()),
         vendor_id=vendor.id,
@@ -120,8 +142,16 @@ def initiate_customer_payment(
         security_challenge_verified=True,
         fraud_status="not_run",
         metadata_json=metadata,
-        squad_response=squad_response,
+        squad_response={
+            "initiate": squad_response,
+            "verification": squad_verification,
+            "verification_error": squad_verification_error,
+        },
     )
+    if squad_verification:
+        verification_data = _extract_squad_data(squad_verification)
+        if verification_data:
+            _update_payment_from_squad(payment, verification_data, payment.squad_response)
     db.add(payment)
     db.commit()
 
@@ -131,6 +161,8 @@ def initiate_customer_payment(
         "checkout_url": payment.checkout_url,
         "security_challenge_verified": payment.security_challenge_verified,
         "squad_response": squad_response,
+        "squad_verification": squad_verification,
+        "squad_verification_error": squad_verification_error,
     }
 
 
@@ -147,35 +179,12 @@ def list_payments(
     return query.order_by(Payment.created_at.desc()).all()
 
 
-@router.get("/squad-history")
-def list_squad_payment_history(
-    currency: str = Query(default="NGN"),
-    start_date: str = Query(...),
-    end_date: str = Query(...),
-    page: int = Query(default=1, ge=1),
-    perpage: int = Query(default=50, ge=1, le=100),
-    reference: str = Query(...),
-    db: Session = Depends(get_db),
-    current_vendor: Vendor = Depends(get_current_vendor),
-):
-    _get_vendor_payment_or_404(db, current_vendor, reference)
-    params: dict[str, Any] = {
-        "currency": currency,
-        "start_date": start_date,
-        "end_date": end_date,
-        "page": page,
-        "perpage": perpage,
-        "reference": reference,
-    }
-    try:
-        return query_squad_transactions(params)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Squad transaction history failed: {exc}") from exc
-
-
 @router.get("/security-question")
 def get_payment_security_question(current_vendor: Vendor = Depends(get_current_vendor)):
-    return {"question": settings.PAYMENT_SECURITY_QUESTION, "required": True}
+    return {
+        "question": current_vendor.payment_security_question or settings.PAYMENT_SECURITY_QUESTION,
+        "required": True,
+    }
 
 
 @router.get("/{transaction_ref}", response_model=PaymentStatusResponse)
@@ -188,8 +197,21 @@ def get_payment_status(
 
     try:
         squad_response = verify_payment(transaction_ref)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        squad_response = {
+            "success": False,
+            "message": "Local payment exists, but Squad could not verify the reference yet.",
+            "verification_error": exc.detail,
+        }
+        payment.squad_response = {
+            "previous": payment.squad_response,
+            "verification_error": exc.detail,
+        }
+        db.commit()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Squad verify payment failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail={"message": f"Squad verify payment failed: {exc}"}) from exc
 
     squad_data = _extract_squad_data(squad_response)
     if squad_data:
@@ -223,11 +245,34 @@ async def receive_squad_payment_webhook(request: Request, db: Session = Depends(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     if event == "charge_successful":
-        _update_payment_from_squad(payment, body, payload)
+        squad_verification, squad_verification_error = _verify_payment_best_effort(transaction_ref)
+        squad_data = _extract_squad_data(squad_verification or {})
+        verified = bool(squad_data)
+        squad_response = {
+            "webhook": payload,
+            "verification": squad_verification,
+            "verification_error": squad_verification_error,
+        }
+        if squad_data:
+            _update_payment_from_squad(payment, squad_data, squad_response)
+        elif settings.APP_ENV != "production":
+            squad_response["verification_fallback"] = "Used webhook body because Squad verification was unavailable outside production."
+            _update_payment_from_squad(payment, body, squad_response)
+        else:
+            payment.squad_response = squad_response
+            payment.fraud_status = "review"
+            payment.fraud_notes = "Squad webhook received, but server-side verification failed. Payment status was not updated."
     else:
         payment.squad_response = payload
         payment.fraud_status = "not_run"
         payment.fraud_notes = f"Ignored unsupported Squad event: {event}."
+        verified = False
 
     db.commit()
-    return {"received": True, "event": event, "transaction_ref": transaction_ref, "status": payment.status}
+    return {
+        "received": True,
+        "event": event,
+        "transaction_ref": transaction_ref,
+        "status": payment.status,
+        "verified": verified,
+    }

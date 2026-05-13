@@ -1,11 +1,7 @@
 import datetime as dt
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
-
-class SquadCreateMerchantRequest(BaseModel):
-    vendor_id: str
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class PaymentCurrency(str, Enum):
@@ -15,9 +11,9 @@ class PaymentCurrency(str, Enum):
 
 class PaymentChannel(str, Enum):
     card = "card"
-    bank = "bank"
+    bank_transfer = "bank_transfer"
     ussd = "ussd"
-    transfer = "transfer"
+    squad = "squad"
 
 
 class PaymentInitiateRequest(BaseModel):
@@ -30,13 +26,21 @@ class PaymentInitiateRequest(BaseModel):
     payment_channels: list[PaymentChannel] = Field(
         default_factory=lambda: [
             PaymentChannel.card,
-            PaymentChannel.bank,
+            PaymentChannel.bank_transfer,
             PaymentChannel.ussd,
-            PaymentChannel.transfer,
+            PaymentChannel.squad,
         ]
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
     pass_charge: bool = False
+
+    @field_validator("payment_channels", mode="before")
+    @classmethod
+    def normalize_payment_channels(cls, value):
+        aliases = {"bank": "bank_transfer", "transfer": "squad"}
+        if value is None:
+            return value
+        return [aliases.get(item, item) for item in value]
 
 
 class PaymentInitiateResponse(BaseModel):
@@ -45,6 +49,8 @@ class PaymentInitiateResponse(BaseModel):
     checkout_url: str | None
     security_challenge_verified: bool
     squad_response: dict[str, Any] | None = None
+    squad_verification: dict[str, Any] | None = None
+    squad_verification_error: dict[str, Any] | None = None
 
 
 class PaymentOut(BaseModel):

@@ -3,13 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine, verify_database_connection
-from app.models import Document, Flag, Payment, Vendor, Verification
-from app.routers import dashboard, documents, payments, squad, vendors, verification
+from app.models import Document, Flag, Payment, Vendor, Verification, Wallet
+from app.routers import payments, transfers, vendors, wallets
 from app.utils.logger import logger
 
 
 # Keep model imports referenced so SQLAlchemy registers every table before create_all.
-_registered_models = (Document, Flag, Payment, Vendor, Verification)
+_registered_models = (Document, Flag, Payment, Vendor, Verification, Wallet)
 
 # 🧱 Create all DB tables on startup for the hackathon/demo flow.
 Base.metadata.create_all(bind=engine)
@@ -38,15 +38,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(vendors.router, prefix=f"{settings.API_V1_PREFIX}/vendors", tags=["Vendors"])
-app.include_router(verification.router, prefix=f"{settings.API_V1_PREFIX}/verify", tags=["Verification"])
-app.include_router(documents.router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Documents"])
-app.include_router(squad.router, prefix=f"{settings.API_V1_PREFIX}/squad", tags=["Squad"])
-app.include_router(dashboard.router, prefix=f"{settings.API_V1_PREFIX}/dashboard", tags=["Dashboard"])
+app.include_router(vendors.router, prefix="/api/vendors", tags=["Vendors"])
+app.include_router(wallets.router, prefix="/api/wallets", tags=["Wallets"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
-app.include_router(payments.router, prefix=f"{settings.API_V1_PREFIX}/payments", tags=["Payments"])
+app.include_router(transfers.router, prefix="/api/transfers", tags=["Transfers"])
 app.include_router(payments.webhook_router, prefix="/api/webhooks", tags=["Webhooks"])
-app.include_router(payments.webhook_router, prefix=f"{settings.API_V1_PREFIX}/webhooks", tags=["Webhooks"])
 
 
 @app.get("/health")
