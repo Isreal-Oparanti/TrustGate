@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.vendor import Vendor
 from app.models.verification import Verification
-from app.schemas.dashboard import DashboardStats, QueueOut
+from app.schemas.dashboard import DashboardStats
+from app.schemas.vendor import VendorOut
 
 
 router = APIRouter()
@@ -26,16 +27,15 @@ def get_stats(db: Session = Depends(get_db)):
     blocked = db.query(func.count(Vendor.id)).filter(Vendor.status == "blocked").scalar() or 0
     average_score = db.query(func.avg(Verification.trust_score)).scalar() or 0
     return {
-        "total_vendors": total,
         "total_today": total_today,
         "approved": approved,
         "pending_review": pending_review,
         "blocked": blocked,
-        "average_score": round(float(average_score), 2),
+        "avg_score": round(float(average_score), 2),
     }
 
 
-@router.get("/queue", response_model=QueueOut)
+@router.get("/queue", response_model=list[VendorOut])
 def get_queue(db: Session = Depends(get_db)):
     vendors = (
         db.query(Vendor)
@@ -44,16 +44,7 @@ def get_queue(db: Session = Depends(get_db)):
         .limit(50)
         .all()
     )
-    items = []
-    for vendor in vendors:
-        latest = (
-            db.query(Verification)
-            .filter(Verification.vendor_id == vendor.id)
-            .order_by(Verification.created_at.desc())
-            .first()
-        )
-        items.append({"vendor": vendor, "latest_verification": latest})
-    return {"items": items}
+    return vendors
 
 
 @router.get("/recent", response_model=list[dict])

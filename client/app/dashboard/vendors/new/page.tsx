@@ -1,0 +1,930 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  AlertCircle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  FileSearch,
+  Globe2,
+  Landmark,
+  Loader2,
+  ScanText,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
+import { motion } from "framer-motion";
+import toast from "react-hot-toast";
+import { DocumentUpload } from "@/components/vendors/DocumentUpload";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
+import { ScoreRing } from "@/components/ui/ScoreRing";
+import { Select } from "@/components/ui/Select";
+import { api } from "@/lib/api";
+import { getMerchantPreset, presetOptions } from "@/lib/merchantPresets";
+import { documentLabel, formatNaira, getTierLabel, tierRequiredDocuments } from "@/lib/utils";
+import type { FormState, Tier, VendorCreate, Verification } from "@/types";
+
+type FormField = keyof FormState;
+type UploadState = "idle" | "uploading" | "success" | "error";
+type VerificationStageId =
+  | "idle"
+  | "creating"
+  | "uploading"
+  | "ocr"
+  | "nlp"
+  | "identity"
+  | "external"
+  | "summary";
+
+interface UploadStatus {
+  state: UploadState;
+  progress: number;
+  error?: string;
+}
+
+const verificationStages: Array<{
+  id: Exclude<VerificationStageId, "idle">;
+  label: string;
+  detail: string;
+  icon: typeof FileSearch;
+}> = [
+  {
+    id: "creating",
+    label: "Creating vendor profile",
+    detail: "Running deterministic field checks before saving.",
+    icon: ShieldCheck,
+  },
+  {
+    id: "uploading",
+    label: "Uploading documents",
+    detail: "Sending each required file with tracked upload status.",
+    icon: FileSearch,
+  },
+  {
+    id: "ocr",
+    label: "Analyzing and extracting documents",
+    detail: "Reading the CAC certificate, utility bill, and director ID.",
+    icon: ScanText,
+  },
+  {
+    id: "nlp",
+    label: "Preprocessing document text",
+    detail: "Matching business name, address, RC number, and category signals.",
+    icon: Sparkles,
+  },
+  {
+    id: "identity",
+    label: "Checking BVN and NIN",
+    detail: "Comparing identity signals against the director submission.",
+    icon: Landmark,
+  },
+  {
+    id: "external",
+    label: "Checking registry, address, and web presence",
+    detail: "Reviewing CAC, address precision, website, and reputation signals.",
+    icon: Globe2,
+  },
+  {
+    id: "summary",
+    label: "Preparing compliance report",
+    detail: "Scoring the verification layers and building the final review.",
+    icon: Check,
+  },
+];
+
+const initialForm: FormState = {
+  business_name: "",
+  tier: "tier2",
+  rc_number: "",
+  director_name: "",
+  business_category: "",
+  website_url: "",
+  social_media_url: "",
+  expected_monthly_volume: "",
+  bvn: "",
+  nin: "",
+  email: "",
+  phone: "",
+  address: "",
+  bank_name: "",
+  bank_code: "",
+  account_number: "",
+  account_name: "",
+};
+
+const steps = [
+  { number: 1, label: "Business Info" },
+  { number: 2, label: "Documents" },
+  { number: 3, label: "Review" },
+];
+
+const businessCategoryOptions = [
+  { label: "Select category", value: "" },
+  { label: "Retail", value: "retail" },
+  { label: "Food & Bev", value: "food" },
+  { label: "Tech", value: "tech" },
+  { label: "Construction", value: "construction" },
+  { label: "Logistics", value: "logistics" },
+  { label: "Other", value: "other" },
+];
+
+const bankOptions = [
+  { label: "Select bank", value: "" },
+  { label: "GTBank", value: "058" },
+  { label: "Access Bank", value: "044" },
+  { label: "Zenith Bank", value: "057" },
+  { label: "UBA", value: "033" },
+  { label: "First Bank", value: "011" },
+  { label: "Other", value: "000" },
+];
+
+const stepOneFields: FormField[] = [
+  "business_name",
+  "rc_number",
+  "director_name",
+  "business_category",
+  "bvn",
+  "nin",
+  "email",
+  "phone",
+  "address",
+];
+
+const bankFields: FormField[] = ["bank_code", "account_number", "account_name"];
+
+function nairaToKobo(value: string): number | undefined {
+  const amount = Number(value.replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+  return Math.round(amount * 100);
+}
+
+function validate(form: FormState): Partial<Record<FormField, string>> {
+  const errors: Partial<Record<FormField, string>> = {};
+  if (!form.business_name.trim()) errors.business_name = "Business name is required";
+  if (form.tier === "tier3" && !form.rc_number.trim()) errors.rc_number = "RC number is required for companies";
+  if (form.rc_number.trim() && !/^RC\s*\d{5,7}$/i.test(form.rc_number.trim())) {
+    errors.rc_number = "Use the format RC 1234567";
+  }
+  if (!form.director_name.trim()) errors.director_name = "Director name is required";
+  if (!form.business_category) errors.business_category = "Select a business category";
+  if (form.bvn.replace(/\D/g, "").length !== 11) errors.bvn = "Enter an 11 digit BVN";
+  if (form.nin.replace(/\D/g, "").length !== 11) errors.nin = "Enter an 11 digit NIN";
+  if (!/^\S+@\S+\.\S+$/.test(form.email)) errors.email = "Enter a valid email address";
+  if (!/^(\+?234|0)[789][01]\d{8}$/.test(form.phone.trim())) {
+    errors.phone = "Enter a valid Nigerian phone number";
+  }
+  if (!form.address.trim()) errors.address = "Registered address is required";
+  if (!form.bank_code) errors.bank_code = "Select a settlement bank";
+  if (!/^\d{10}$/.test(form.account_number.trim())) errors.account_number = "Enter a 10 digit account number";
+  if (!form.account_name.trim()) errors.account_name = "Account name is required";
+  return errors;
+}
+
+function StepIndicator({ currentStep }: { currentStep: number }) {
+  return (
+    <Card className="mb-8">
+      <div className="grid grid-cols-3 items-start gap-3">
+        {steps.map((step, index) => {
+          const active = currentStep === step.number;
+          const complete = currentStep > step.number;
+          return (
+            <div key={step.number} className="relative flex flex-col items-center text-center">
+              {index < steps.length - 1 ? <span className="absolute left-1/2 top-4 h-0.5 w-full bg-[#E5E9ED]" /> : null}
+              <span
+                className={`relative z-10 flex h-8 w-8 items-center justify-center rounded-full border-2 text-[12px] font-semibold ${
+                  complete
+                    ? "border-[#0D9B68] bg-[#0D9B68] text-white"
+                    : active
+                      ? "border-[#E51E56] bg-[#E51E56] text-white"
+                      : "border-[#CDD3D9] bg-white text-[#8FA3AF]"
+                }`}
+              >
+                {complete ? <Check className="h-4 w-4" /> : step.number}
+              </span>
+              <p className={`mt-2 text-[12px] font-medium ${active ? "text-[#E51E56]" : "text-[#4A6B7C]"}`}>
+                Step {step.number}
+              </p>
+              <p className="text-[11px] text-[#8FA3AF]">{step.label}</p>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function UploadProgressRows({
+  docTypes,
+  statuses,
+}: {
+  docTypes: string[];
+  statuses: Record<string, UploadStatus>;
+}) {
+  return (
+    <div className="mt-5 space-y-3">
+      {docTypes.map((docType) => {
+        const status = statuses[docType] || { state: "idle", progress: 0 };
+        const color = status.state === "success" ? "#0D9B68" : status.state === "error" ? "#DC2626" : "#E51E56";
+        const label =
+          status.state === "success"
+            ? "Uploaded"
+            : status.state === "error"
+              ? "Error"
+              : status.state === "uploading"
+                ? `Uploading... ${status.progress}%`
+                : "Waiting...";
+
+        return (
+          <div key={docType} className="grid gap-2 text-[12px] sm:grid-cols-[150px_1fr_110px] sm:items-center">
+            <span className="font-medium text-[#0B3142]">{documentLabel(docType)}</span>
+            <span className="h-2 overflow-hidden rounded-full bg-[#E8EEF2]">
+              <span
+                className="block h-full rounded-full transition-all duration-300"
+                style={{ width: `${status.state === "idle" ? 0 : status.progress}%`, backgroundColor: color }}
+              />
+            </span>
+            <span className="font-semibold text-[#4A6B7C]">{label}</span>
+            {status.state === "error" ? (
+              <p className="sm:col-span-3 text-[12px] text-[#DC2626]">{status.error}</p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VerificationProgressPanel({
+  docTypes,
+  stage,
+  statuses,
+}: {
+  docTypes: string[];
+  stage: VerificationStageId;
+  statuses: Record<string, UploadStatus>;
+}) {
+  const activeIndex = Math.max(0, verificationStages.findIndex((item) => item.id === stage));
+
+  return (
+    <div className="mt-8 rounded-xl border border-[#E5E9ED] bg-[#F8F9FA] p-6 text-[#0B3142]">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#E51E56] shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+          <div>
+            <p className="text-[14px] font-semibold">Verification in progress</p>
+            <p className="text-[12px] text-[#4A6B7C]">
+              Keep this page open while TrustGate works through the checks.
+            </p>
+          </div>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-[#4A6B7C]">
+          {Math.min(activeIndex + 1, verificationStages.length)} / {verificationStages.length}
+        </span>
+      </div>
+
+      <div className="mt-6 grid gap-3 lg:grid-cols-7">
+        {verificationStages.map((item, index) => {
+          const Icon = item.icon;
+          const active = index === activeIndex;
+          const done = index < activeIndex;
+          return (
+            <motion.div
+              key={item.id}
+              animate={{
+                opacity: done || active ? 1 : 0.55,
+                y: active ? -2 : 0,
+              }}
+              className={`rounded-lg border p-3 ${
+                active
+                  ? "border-[#E51E56] bg-white shadow-sm"
+                  : done
+                    ? "border-[#D8EDE5] bg-[#F1FBF6]"
+                    : "border-[#E5E9ED] bg-white"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={`flex h-7 w-7 items-center justify-center rounded-full ${
+                    done ? "bg-[#0D9B68] text-white" : active ? "bg-[#FDE8EE] text-[#E51E56]" : "bg-[#E8EEF2] text-[#4A6B7C]"
+                  }`}
+                >
+                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                </span>
+                <span className="text-[12px] font-semibold leading-tight text-[#0B3142]">{item.label}</span>
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-[#4A6B7C]">{item.detail}</p>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      <UploadProgressRows docTypes={docTypes} statuses={statuses} />
+    </div>
+  );
+}
+
+export default function NewVendorPage() {
+  const router = useRouter();
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState<FormState>(initialForm);
+  const [touched, setTouched] = useState<Partial<Record<FormField, boolean>>>({});
+  const [showBvn, setShowBvn] = useState(false);
+  const [showNin, setShowNin] = useState(false);
+  const [documents, setDocuments] = useState<Record<string, File>>({});
+  const [uploadStatuses, setUploadStatuses] = useState<Record<string, UploadStatus>>({});
+  const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [verificationStage, setVerificationStage] = useState<VerificationStageId>("idle");
+  const [verificationResult, setVerificationResult] = useState<Verification | null>(null);
+  const errors = validate(form);
+  const requiredDocs = useMemo(() => tierRequiredDocuments(form.tier), [form.tier]);
+
+  function loadPreset(presetName: string) {
+    const preset = getMerchantPreset(presetName);
+    if (!preset) return;
+
+    // Load form data
+    setForm((current) => ({
+      ...current,
+      ...preset.data,
+    }));
+
+    // Simulate document uploads
+    const simulatedDocs: Record<string, File> = {};
+    const simulatedStatuses: Record<string, UploadStatus> = {};
+
+    Object.entries(preset.documents).forEach(([docType, docInfo]) => {
+      // Create a mock file
+      const mockFile = new File(
+        [new ArrayBuffer(1024)], // 1KB mock content
+        docInfo.filename,
+        { type: "application/pdf" }
+      );
+      simulatedDocs[docType] = mockFile;
+      simulatedStatuses[docType] = {
+        state: "success",
+        progress: 100,
+      };
+    });
+
+    setDocuments(simulatedDocs);
+    setUploadStatuses(simulatedStatuses);
+
+    // Show success toast
+    toast.success("Demo merchant loaded successfully", {
+      duration: 3000,
+    });
+  }
+
+  function updateField(field: FormField, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function markTouched(field: FormField) {
+    setTouched((current) => ({ ...current, [field]: true }));
+  }
+
+  function setDocStatus(docType: string, status: UploadStatus) {
+    setUploadStatuses((current) => ({ ...current, [docType]: status }));
+  }
+
+  function canContinueBusiness() {
+    setTouched((current) => ({
+      ...current,
+      ...Object.fromEntries(stepOneFields.map((field) => [field, true])),
+    }));
+    return stepOneFields.every((field) => !errors[field]);
+  }
+
+  function canContinueDocuments() {
+    setTouched((current) => ({
+      ...current,
+      ...Object.fromEntries(bankFields.map((field) => [field, true])),
+    }));
+    const missing = requiredDocs.filter((doc) => !documents[doc]);
+    if (missing.length > 0) {
+      toast.error(`Upload ${documentLabel(missing[0])} before continuing`);
+      return false;
+    }
+    return bankFields.every((field) => !errors[field]);
+  }
+
+  async function pollVerification(vendorId: string) {
+    const maxAttempts = 45;
+    let attempts = 0;
+
+    return new Promise<Verification>((resolve, reject) => {
+      const interval = window.setInterval(async () => {
+        attempts += 1;
+        if (attempts > maxAttempts) {
+          window.clearInterval(interval);
+          reject(new Error("Verification timeout"));
+          return;
+        }
+
+        try {
+          const result = await api.getVerification(vendorId);
+          if (result.verdict && result.verdict !== "pending" && result.status !== "not_started") {
+            window.clearInterval(interval);
+            resolve(result);
+          }
+        } catch {
+          // 404/not_started is transient while verification is warming up.
+        }
+      }, 4000);
+    });
+  }
+
+  async function uploadDocumentForVendor(vendorId: string, docType: string) {
+    const file = documents[docType];
+    if (!file) return;
+
+    setDocStatus(docType, { state: "uploading", progress: 35 });
+    try {
+      setDocStatus(docType, { state: "uploading", progress: 67 });
+      await api.uploadDocument(vendorId, docType, file);
+      setDocStatus(docType, { state: "success", progress: 100 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed. Please try again.";
+      setDocStatus(docType, { state: "error", progress: 100, error: message });
+      throw new Error(message);
+    }
+  }
+
+  async function retryDocumentUpload(docType: string) {
+    if (!createdVendorId) {
+      toast.error("Create the vendor before retrying upload.");
+      return;
+    }
+    try {
+      await uploadDocumentForVendor(createdVendorId, docType);
+      toast.success(`${documentLabel(docType)} uploaded`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed. Please try again.";
+      toast.error(message);
+    }
+  }
+
+  async function submitVendor() {
+    const missing = requiredDocs.filter((doc) => !documents[doc]);
+    if (Object.keys(errors).length > 0 || missing.length > 0) {
+      toast.error("Complete all required fields and documents");
+      setTouched((current) => ({
+        ...current,
+        ...Object.fromEntries([...stepOneFields, ...bankFields].map((field) => [field, true])),
+      }));
+      return;
+    }
+
+    setSubmitting(true);
+    setVerificationStage("creating");
+    const toastId = toast.loading("Creating vendor...");
+    let stageTimer: number | undefined;
+    try {
+      let vendorId = createdVendorId;
+      if (!vendorId) {
+        const monthlyVolume = nairaToKobo(form.expected_monthly_volume);
+        const payload: VendorCreate = {
+          business_name: form.business_name.trim(),
+          rc_number: form.tier === "tier1" ? null : form.rc_number.trim() || null,
+          director_name: form.director_name.trim(),
+          business_category: form.business_category,
+          website_url: form.website_url.trim(),
+          social_media_url: form.social_media_url.trim(),
+          ...(monthlyVolume ? { expected_monthly_volume: monthlyVolume } : {}),
+          bank_name: form.bank_name,
+          bank_code: form.bank_code,
+          account_number: form.account_number.trim(),
+          account_name: form.account_name.trim(),
+          bvn: form.bvn.replace(/\D/g, ""),
+          nin: form.nin.replace(/\D/g, ""),
+          email: form.email.trim(),
+          phone: form.phone.trim(),
+          address: form.address.trim(),
+          tier: form.tier,
+        };
+        const vendor = await api.createVendor(payload);
+        vendorId = vendor.id;
+        setCreatedVendorId(vendor.id);
+      }
+
+      setVerificationStage("uploading");
+      toast.loading("Uploading documents...", { id: toastId });
+      for (const docType of requiredDocs) {
+        if (uploadStatuses[docType]?.state === "success") continue;
+        await uploadDocumentForVendor(vendorId, docType);
+      }
+
+      setVerificationStage("ocr");
+      toast.loading("Running AI verification...", { id: toastId });
+      const stageOrder: VerificationStageId[] = ["ocr", "nlp", "identity", "external", "summary"];
+      let stageIndex = 0;
+      stageTimer = window.setInterval(() => {
+        stageIndex = Math.min(stageIndex + 1, stageOrder.length - 1);
+        setVerificationStage(stageOrder[stageIndex]);
+      }, 9000);
+      await api.runVerification(vendorId, { wait: false });
+      const completed = await pollVerification(vendorId);
+      window.clearInterval(stageTimer);
+      stageTimer = undefined;
+      setVerificationStage("summary");
+      setVerificationResult(completed);
+      toast.success("Verification complete", { id: toastId });
+    } catch (error) {
+      if (stageTimer) window.clearInterval(stageTimer);
+      const message =
+        error instanceof Error && error.message === "Verification timeout"
+          ? "Verification is taking longer than expected. You can check back later."
+          : error instanceof Error
+            ? error.message
+            : "Verification failed. Please try again.";
+      toast.error(message, { id: toastId });
+      setSubmitting(false);
+      setVerificationStage("idle");
+    }
+  }
+
+  const monthlyVolume = nairaToKobo(form.expected_monthly_volume);
+  const selectedCategory = businessCategoryOptions.find((option) => option.value === form.business_category)?.label;
+
+  return (
+    <div>
+      <PageHeader
+        title="Register New Vendor"
+        subtitle="Capture vendor details, collect required documents, and start AI verification."
+        action={
+          <div className="w-full sm:w-auto">
+            <Select
+              options={presetOptions}
+              value=""
+              onChange={(event) => {
+                if (event.target.value) {
+                  loadPreset(event.target.value);
+                  // Reset select after loading
+                  event.target.value = "";
+                }
+              }}
+            />
+          </div>
+        }
+      />
+      <StepIndicator currentStep={step} />
+
+      {verificationResult ? (
+        <Card className="flex min-h-[420px] flex-col items-center justify-center text-center">
+          <motion.div initial={{ scale: 0.86, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.5 }}>
+            <ScoreRing score={verificationResult.trust_score ?? 0} size="lg" />
+          </motion.div>
+          <Badge className="mt-5" variant={verificationResult.verdict}>
+            {verificationResult.verdict}
+          </Badge>
+          <h3 className="mt-5 text-[22px] font-bold text-[#0B3142]">Verification complete</h3>
+          <p className="mt-1 text-[13px] text-[#4A6B7C]">The AI report is ready for compliance review.</p>
+          <Button className="mt-6" size="lg" onClick={() => router.push(`/dashboard/vendors/${verificationResult.vendor_id}`)}>
+            View Full Report
+          </Button>
+        </Card>
+      ) : (
+        <Card>
+          {step === 1 ? (
+            <div>
+              <div className="grid gap-5 md:grid-cols-2">
+                <Input
+                  label="Business Name"
+                  value={form.business_name}
+                  error={touched.business_name ? errors.business_name : undefined}
+                  onBlur={() => markTouched("business_name")}
+                  onChange={(event) => updateField("business_name", event.target.value)}
+                />
+                <div>
+                  <span className="mb-1.5 block text-[13px] font-medium leading-normal text-[#0B3142]">
+                    Registration Type
+                  </span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["tier1", "tier2", "tier3"] as Tier[]).map((tier) => (
+                      <button
+                        key={tier}
+                        type="button"
+                        className={`h-10 rounded-lg border-[1.5px] px-3 text-[12px] font-medium transition-colors ${
+                          form.tier === tier
+                            ? "border-[#E51E56] bg-[#FDE8EE] text-[#E51E56]"
+                            : "border-[#E5E9ED] bg-white text-[#4A6B7C] hover:bg-[#F8F9FA]"
+                        }`}
+                        onClick={() => setForm((current) => ({ ...current, tier, rc_number: tier === "tier1" ? "" : current.rc_number }))}
+                      >
+                        {getTierLabel(tier)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {form.tier !== "tier1" ? (
+                  <Input
+                    label="RC Number (CAC Registration Number)"
+                    placeholder="RC 1234567"
+                    helperText="Leave blank if registering as an individual (Tier 1)"
+                    value={form.rc_number}
+                    error={touched.rc_number ? errors.rc_number : undefined}
+                    onBlur={() => markTouched("rc_number")}
+                    onChange={(event) => updateField("rc_number", event.target.value)}
+                  />
+                ) : null}
+                <Input
+                  label="Director Name"
+                  value={form.director_name}
+                  error={touched.director_name ? errors.director_name : undefined}
+                  onBlur={() => markTouched("director_name")}
+                  onChange={(event) => updateField("director_name", event.target.value)}
+                />
+                <Select
+                  label="Business Category"
+                  options={businessCategoryOptions}
+                  value={form.business_category}
+                  error={touched.business_category ? errors.business_category : undefined}
+                  onBlur={() => markTouched("business_category")}
+                  onChange={(event) => updateField("business_category", event.target.value)}
+                />
+                <Input
+                  label="Website URL"
+                  placeholder="https://"
+                  value={form.website_url}
+                  onChange={(event) => updateField("website_url", event.target.value)}
+                />
+                <Input
+                  label="Social Media"
+                  placeholder="https://instagram.com/..."
+                  value={form.social_media_url}
+                  onChange={(event) => updateField("social_media_url", event.target.value)}
+                />
+                <Input
+                  label="Expected Monthly Volume (NGN)"
+                  placeholder="2500000"
+                  helperText="Approximate naira volume per month"
+                  inputMode="numeric"
+                  value={form.expected_monthly_volume}
+                  onChange={(event) => updateField("expected_monthly_volume", event.target.value)}
+                />
+                <Input
+                  label="BVN"
+                  type={showBvn ? "text" : "password"}
+                  value={form.bvn}
+                  error={touched.bvn ? errors.bvn : undefined}
+                  onBlur={() => markTouched("bvn")}
+                  onChange={(event) => updateField("bvn", event.target.value)}
+                  rightElement={
+                    <button
+                      type="button"
+                      className="text-[#4A6B7C]"
+                      aria-label={showBvn ? "Hide BVN" : "Show BVN"}
+                      onClick={() => setShowBvn((value) => !value)}
+                    >
+                      {showBvn ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  }
+                />
+                <Input
+                  label="NIN"
+                  type={showNin ? "text" : "password"}
+                  value={form.nin}
+                  error={touched.nin ? errors.nin : undefined}
+                  onBlur={() => markTouched("nin")}
+                  onChange={(event) => updateField("nin", event.target.value)}
+                  rightElement={
+                    <button
+                      type="button"
+                      className="text-[#4A6B7C]"
+                      aria-label={showNin ? "Hide NIN" : "Show NIN"}
+                      onClick={() => setShowNin((value) => !value)}
+                    >
+                      {showNin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  }
+                />
+                <Input
+                  label="Email"
+                  type="email"
+                  value={form.email}
+                  error={touched.email ? errors.email : undefined}
+                  onBlur={() => markTouched("email")}
+                  onChange={(event) => updateField("email", event.target.value)}
+                />
+                <Input
+                  label="Phone"
+                  value={form.phone}
+                  error={touched.phone ? errors.phone : undefined}
+                  onBlur={() => markTouched("phone")}
+                  onChange={(event) => updateField("phone", event.target.value)}
+                />
+                <Input
+                  className="md:col-span-2"
+                  label="Registered Address"
+                  value={form.address}
+                  error={touched.address ? errors.address : undefined}
+                  onBlur={() => markTouched("address")}
+                  onChange={(event) => updateField("address", event.target.value)}
+                />
+              </div>
+              <div className="mt-8 flex justify-end">
+                <Button
+                  rightIcon={<ChevronRight className="h-4 w-4" />}
+                  onClick={() => {
+                    if (canContinueBusiness()) setStep(2);
+                  }}
+                >
+                  Continue
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {step === 2 ? (
+            <div>
+              <div className="grid gap-4">
+                {requiredDocs.map((docType) => {
+                  const status = uploadStatuses[docType] || { state: "idle", progress: 0 };
+                  return (
+                    <DocumentUpload
+                      key={docType}
+                      docType={docType}
+                      file={documents[docType]}
+                      uploadState={status.state}
+                      progress={status.progress}
+                      error={status.error}
+                      onRetry={(type) => void retryDocumentUpload(type)}
+                      onFileSelected={(type, file) => {
+                        setDocuments((current) => ({ ...current, [type]: file }));
+                        setDocStatus(type, { state: "idle", progress: 0 });
+                      }}
+                      onRemove={(type) => {
+                        setDocuments((current) => {
+                          const next = { ...current };
+                          delete next[type];
+                          return next;
+                        });
+                        setUploadStatuses((current) => {
+                          const next = { ...current };
+                          delete next[type];
+                          return next;
+                        });
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
+              <div className="mt-8 border-t border-[#E5E9ED] pt-6">
+                <h3 className="text-[18px] font-semibold text-[#0B3142]">Settlement Bank Details</h3>
+                <p className="mt-1 text-[12px] text-[#4A6B7C]">This is where Squad will settle your payments</p>
+                <div className="mt-5 grid gap-5 md:grid-cols-3">
+                  <Select
+                    label="Bank Name"
+                    options={bankOptions}
+                    value={form.bank_code}
+                    error={touched.bank_code ? errors.bank_code : undefined}
+                    onBlur={() => markTouched("bank_code")}
+                    onChange={(event) => {
+                      const bank = bankOptions.find((option) => option.value === event.target.value);
+                      setForm((current) => ({
+                        ...current,
+                        bank_code: event.target.value,
+                        bank_name: bank?.label === "Select bank" ? "" : bank?.label || "",
+                      }));
+                    }}
+                  />
+                  <Input
+                    label="Account Number"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={form.account_number}
+                    error={touched.account_number ? errors.account_number : undefined}
+                    onBlur={() => markTouched("account_number")}
+                    onChange={(event) => updateField("account_number", event.target.value.replace(/\D/g, ""))}
+                  />
+                  <Input
+                    label="Account Name"
+                    helperText="Must match business name"
+                    value={form.account_name}
+                    error={touched.account_name ? errors.account_name : undefined}
+                    onBlur={() => markTouched("account_name")}
+                    onChange={(event) => updateField("account_name", event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-8 flex justify-between">
+                <Button
+                  variant="secondary"
+                  leftIcon={<ChevronLeft className="h-4 w-4" />}
+                  onClick={() => setStep(1)}
+                >
+                  Back
+                </Button>
+                <Button
+                  rightIcon={<ChevronRight className="h-4 w-4" />}
+                  onClick={() => {
+                    if (canContinueDocuments()) setStep(3);
+                  }}
+                >
+                  Continue
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {step === 3 ? (
+            <div>
+              <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+                <div className="rounded-xl bg-[#F8F9FA] p-5">
+                  <h3 className="text-[18px] font-semibold text-[#0B3142]">Business Information</h3>
+                  <dl className="mt-4 grid gap-3 text-[13px] md:grid-cols-2">
+                    {[
+                      ["Business Name", form.business_name],
+                      ["Tier", getTierLabel(form.tier)],
+                      ["RC Number", form.rc_number || "Not required"],
+                      ["Director Name", form.director_name],
+                      ["Business Category", selectedCategory || "Not selected"],
+                      ["Website", form.website_url || "Optional"],
+                      ["Social Media", form.social_media_url || "Optional"],
+                      ["Expected Monthly Volume", monthlyVolume ? formatNaira(monthlyVolume) : "Not provided"],
+                      ["BVN", "***********"],
+                      ["NIN", "***********"],
+                      ["Email", form.email],
+                      ["Phone", form.phone],
+                      ["Address", form.address],
+                      ["Bank", form.bank_name],
+                      ["Account Number", form.account_number],
+                      ["Account Name", form.account_name],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <dt className="text-[11px] font-semibold uppercase tracking-wide text-[#8FA3AF]">
+                          {label}
+                        </dt>
+                        <dd className="mt-1 break-words font-medium text-[#0B3142]">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+                <div className="rounded-xl border border-[#E5E9ED] p-5">
+                  <h3 className="text-[18px] font-semibold text-[#0B3142]">Documents</h3>
+                  <div className="mt-4 space-y-3">
+                    {requiredDocs.map((docType) => (
+                      <div key={docType} className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-[#0D9B68]" />
+                          <span className="text-[13px] font-medium text-[#0B3142]">{documentLabel(docType)}</span>
+                        </div>
+                        <span className="truncate text-right text-[11px] text-[#8FA3AF]">{documents[docType]?.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {submitting ? (
+                <VerificationProgressPanel
+                  docTypes={requiredDocs}
+                  stage={verificationStage === "idle" ? "creating" : verificationStage}
+                  statuses={uploadStatuses}
+                />
+              ) : Object.values(uploadStatuses).some((status) => status.state === "error") ? (
+                <div className="mt-8 flex items-start gap-3 rounded-xl bg-[#FEE2E2] p-4 text-[#991B1B]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p className="text-[13px]">Fix the failed upload, then submit again.</p>
+                </div>
+              ) : null}
+
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-between">
+                <Button
+                  variant="secondary"
+                  leftIcon={<ChevronLeft className="h-4 w-4" />}
+                  onClick={() => setStep(2)}
+                  disabled={submitting}
+                >
+                  Back
+                </Button>
+                <Button
+                  className="sm:min-w-[260px]"
+                  size="lg"
+                  loading={submitting}
+                  leftIcon={<ShieldCheck className="h-4 w-4" />}
+                  onClick={() => void submitVendor()}
+                >
+                  Submit for Verification
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      )}
+    </div>
+  );
+}

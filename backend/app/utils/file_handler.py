@@ -5,7 +5,7 @@ from app.config import settings
 from app.utils.logger import logger
 
 
-ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 
 
 def ensure_upload_dir() -> Path:
@@ -18,7 +18,7 @@ def safe_filename(filename: str) -> str:
     name = Path(filename).name.replace(" ", "_")
     suffix = Path(name).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
-        raise ValueError("Unsupported document type. Use PDF, image, WEBP, or TXT.")
+        raise ValueError("Unsupported document type. Use PDF, JPG, or PNG.")
     return f"{uuid4()}_{name}"
 
 

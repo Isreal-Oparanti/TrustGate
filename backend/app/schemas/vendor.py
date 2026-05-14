@@ -1,6 +1,7 @@
 import datetime as dt
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
@@ -10,14 +11,29 @@ class TierEnum(str, Enum):
     tier3 = "tier3"
 
 
+class VerdictEnum(str, Enum):
+    approved = "approved"
+    review = "review"
+    blocked = "blocked"
+
+
 class VendorCreate(BaseModel):
     business_name: str
     rc_number: Optional[str] = None
+    website_url: Optional[str] = None
+    social_media_url: Optional[str] = None
+    business_category: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_code: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
     bvn: str
     nin: str
     email: EmailStr
     phone: str
     address: str
+    director_name: Optional[str] = None
+    expected_monthly_volume: Optional[int] = None
     tier: TierEnum = TierEnum.tier2
     settlement_account_name: str = Field(min_length=1)
     settlement_account_number: str = Field(min_length=1)
@@ -49,12 +65,31 @@ class VendorCreate(BaseModel):
             raise ValueError("NIN must be exactly 11 numeric characters.")
         return value
 
+
+class VendorStatusUpdate(BaseModel):
+    status: VerdictEnum
+
+
 class VendorOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     business_name: str
     rc_number: Optional[str] = None
+    website_url: Optional[str] = None
+    social_media_url: Optional[str] = None
+    business_category: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_code: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
+    bvn: str
+    nin: str
+    email: str
+    phone: str
+    address: str
+    director_name: Optional[str] = None
+    expected_monthly_volume: Optional[int] = None
     tier: TierEnum
     status: str
     squad_account_id: Optional[str] = None
@@ -62,6 +97,7 @@ class VendorOut(BaseModel):
     settlement_status: str = "not_started"
     payment_security_question: Optional[str] = None
     created_at: dt.datetime
+    updated_at: dt.datetime
 
 
 class VendorSubMerchantOut(BaseModel):
@@ -80,4 +116,4 @@ class VendorSubMerchantOut(BaseModel):
 
 class VendorCreateResponse(BaseModel):
     vendor: VendorSubMerchantOut
-    squad_response: dict
+    squad_response: dict[str, Any]

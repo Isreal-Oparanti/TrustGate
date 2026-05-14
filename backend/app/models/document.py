@@ -9,6 +9,7 @@ class Document(Base):
 
     id = Column(String, primary_key=True, index=True)
     vendor_id = Column(String, ForeignKey("vendors.id"), nullable=False, index=True)
+    doc_type = Column(String, nullable=False, index=True)
     filename = Column(String, nullable=False)
     content_type = Column(String, nullable=False)
     path = Column(String, nullable=False)
