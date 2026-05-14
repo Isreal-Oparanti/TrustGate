@@ -7,6 +7,7 @@ class DocumentOut(BaseModel):
 
     id: str
     vendor_id: str
+    doc_type: str
     filename: str
     content_type: str
     path: str

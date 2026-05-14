@@ -1,54 +1,114 @@
 import datetime as dt
+import re
 import uuid
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from app.database import SessionLocal, get_db
+
+from app.database import get_db
 from app.models.vendor import Vendor
 from app.schemas.vendor import TierEnum, VendorCreate, VendorOut, VendorStatusUpdate
-from app.services.scorer import run_verification
 from app.utils.logger import db_log, logger
 
 
 router = APIRouter()
 
 
-def run_verification_for_vendor_id(vendor_id: str):
-    db = SessionLocal()
-    try:
-        vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
-        if vendor:
-            run_verification(db, vendor)
-            logger.info("🤖 Verification pipeline completed for vendor %s", vendor_id)
-    finally:
-        db.close()
+def validate_vendor_fields(payload: VendorCreate) -> list[str]:
+    errors: list[str] = []
+    tier = payload.tier.value
+    bvn_status = "\u2713"
+    nin_status = "\u2713"
+    phone_status = "\u2713"
+    email_status = "\u2713"
+    rc_status = "\u2713"
+
+    if payload.bvn and not re.match(r"^\d{11}$", payload.bvn):
+        errors.append("BVN must be exactly 11 digits")
+        bvn_status = "\u2717"
+    elif payload.bvn and (len(set(payload.bvn)) == 1 or payload.bvn == "12345678901"):
+        errors.append("BVN appears to be a placeholder value")
+        bvn_status = "\u26a0 placeholder"
+
+    if payload.nin and not re.match(r"^\d{11}$", payload.nin):
+        errors.append("NIN must be exactly 11 digits")
+        nin_status = "\u2717"
+    elif payload.nin and (len(set(payload.nin)) == 1 or payload.nin == "12345678901"):
+        errors.append("NIN appears to be a placeholder value")
+        nin_status = "\u26a0 placeholder"
+
+    if payload.phone and not re.match(r"^(\+?234|0)[789][01]\d{8}$", payload.phone):
+        errors.append("Invalid Nigerian phone number format")
+        phone_status = "\u2717"
+
+    if tier in ["tier2", "tier3"] and payload.email:
+        free_domains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"]
+        domain = str(payload.email).split("@")[-1].lower()
+        if domain in free_domains:
+            errors.append("Business accounts should use a corporate email address")
+            email_status = "\u26a0 free_domain"
+
+    if tier == "tier3" and not (payload.rc_number or "").strip():
+        errors.append("RC number is required for Tier 3 vendors")
+        rc_status = "\u2717"
+    elif tier in ["tier2", "tier3"] and payload.rc_number:
+        if not re.match(r"^RC\s*\d{5,7}$", payload.rc_number, re.IGNORECASE):
+            errors.append("RC number format invalid - expected RC followed by 5-7 digits")
+            rc_status = "\u2717"
+
+    logger.info(
+        "\u2192 Validating vendor fields: BVN=%s NIN=%s Phone=%s Email=%s RC=%s",
+        bvn_status,
+        nin_status,
+        phone_status,
+        email_status,
+        rc_status,
+    )
+    return errors
 
 
 @router.post("/", response_model=VendorOut, status_code=201)
 def create_vendor(
     payload: VendorCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    validation_errors = validate_vendor_fields(payload)
+    if validation_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Validation failed",
+                "errors": validation_errors,
+            },
+        )
+
     vendor = Vendor(
         id=str(uuid.uuid4()),
         business_name=payload.business_name,
-        rc_number=payload.rc_number,
+        rc_number=payload.rc_number or None,
+        website_url=payload.website_url or None,
+        social_media_url=payload.social_media_url or None,
+        business_category=payload.business_category or None,
+        bank_name=payload.bank_name or None,
+        bank_code=payload.bank_code or None,
+        account_number=payload.account_number or None,
+        account_name=payload.account_name or None,
         bvn=payload.bvn,
         nin=payload.nin,
         email=str(payload.email),
         phone=payload.phone,
         address=payload.address,
-        director_name=payload.director_name or "",
+        director_name=payload.director_name or None,
+        expected_monthly_volume=payload.expected_monthly_volume,
         tier=payload.tier.value,
         status="pending",
         created_at=dt.datetime.now(dt.UTC),
     )
-    db_log(f"→ Saving vendor: {vendor.business_name} | tier: {vendor.tier} | id: {vendor.id}")
+    db_log(f"\u2192 Saving vendor: {vendor.business_name} | tier: {vendor.tier} | id: {vendor.id}")
     db.add(vendor)
     db.commit()
     db.refresh(vendor)
-    db_log(f"✓ Vendor saved — id: {vendor.id}")
-    background_tasks.add_task(run_verification_for_vendor_id, vendor.id)
+    db_log(f"\u2713 Vendor saved - id: {vendor.id}")
     return vendor
 
 

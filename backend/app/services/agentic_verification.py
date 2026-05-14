@@ -271,8 +271,22 @@ def _llama_client():
     return OpenAI(
         base_url=NVIDIA_BASE_URL,
         api_key=settings.NVIDIA_API_KEY,
-        http_client=httpx.Client(),
+        timeout=8.0,
+        max_retries=0,
+        http_client=httpx.Client(timeout=8.0),
     )
+
+
+def _llm_provider() -> str:
+    return (settings.LLM_EXPLANATION_PROVIDER or "local_template").lower()
+
+
+def _use_nvidia_llama() -> bool:
+    return bool(settings.NVIDIA_API_KEY) and _llm_provider() in {"nvidia", "nvidia_llama", "llama", "nvidia_agentic", "agentic_llm"}
+
+
+def _use_llm_planning() -> bool:
+    return bool(settings.NVIDIA_API_KEY) and _llm_provider() in {"nvidia_agentic", "agentic_llm"}
 
 
 def _call_llama(system_prompt: str, user_payload: dict[str, Any], *, max_tokens: int) -> str:
@@ -330,6 +344,14 @@ def _plan_summary(plan_steps: list[dict[str, Any]]) -> str:
 
 
 def generate_verification_plan(vendor_facts: dict[str, Any]) -> dict[str, Any]:
+    if not _use_llm_planning():
+        plan = _default_plan(vendor_facts, f"LLM planning disabled ({_llm_provider()})")
+        agent_log("── PLANNING: Using deterministic TrustGate plan")
+        agent_log("── PLAN RECEIVED:")
+        agent_log(f"   Hypothesis: {plan.get('risk_hypothesis', 'unknown')}")
+        agent_log(f"   Plan: {_plan_summary(plan.get('plan', []))}")
+        return plan
+
     agent_log("── PLANNING: Calling LLaMA to generate verification plan...")
     try:
         parsed = _safe_json_parse(_call_llama(PLANNING_SYSTEM_PROMPT, vendor_facts, max_tokens=512))
@@ -346,6 +368,17 @@ def generate_verification_plan(vendor_facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def reason_about_tool(tool_result: ToolResult) -> dict[str, Any]:
+    if not _use_llm_planning():
+        risk_delta = "increased" if tool_result.flags else "decreased" if tool_result.status in {"verified", "precise_match", "strong_footprint"} else "unchanged"
+        return {
+            "finding": f"{tool_result.tool_name} returned status={tool_result.status}.",
+            "risk_delta": risk_delta,
+            "risk_delta_reason": "Deterministic TrustGate reasoning used for fast verification.",
+            "continue_plan": not any(flag.severity == FlagSeverity.CRITICAL for flag in tool_result.flags),
+            "override_next_tool": None,
+            "flag_raised": None,
+        }
+
     payload = {tool_result.tool_name: tool_result_to_json(tool_result)}
     try:
         parsed = _safe_json_parse(_call_llama(REASONING_SYSTEM_PROMPT, payload, max_tokens=512))
@@ -473,6 +506,10 @@ async def tool_dojah_bvn(bvn: str, director_name: str) -> ToolResult:
             status = "watchlisted"
             confidence = 0.25
 
+        agent_log(
+            f"BVN name cross-check: BVN returned '{returned_name or '(sandbox: validation only)'}' "
+            f"vs director '{director_name}' \u2192 match: {name_match_score:.2f}"
+        )
         agent_log(f"   Result: status={status} | name_match={name_match_score:.2f} | watchlisted={watch_listed}")
         return ToolResult(
             tool_name="dojah_bvn",
@@ -779,7 +816,94 @@ async def tool_google_maps(address: str) -> ToolResult:
         )
 
 
-async def _google_search_compatibility(business_name: str) -> ToolResult:
+async def check_category_web_consistency(
+    business_name: str,
+    declared_category: str,
+    search_results: list[dict],
+) -> Flag | None:
+    if not declared_category or not search_results:
+        return None
+
+    search_context = " ".join(
+        f"{result.get('title', '')} {result.get('body', '') or result.get('snippet', '')}"
+        for result in search_results[:5]
+    )
+    prompt = f"""
+    A business declares its category as: "{declared_category}"
+    Web search results for this business show: "{search_context[:500]}"
+
+    Does the web presence match the declared business category?
+    Respond ONLY with JSON: {{"match": true/false, "reason": "one sentence"}}
+    """
+
+    try:
+        if not _use_nvidia_llama():
+            category_terms = {
+                "retail": {"store", "shop", "goods", "market", "sales", "merchant"},
+                "food": {"food", "restaurant", "catering", "kitchen", "meal", "eatery"},
+                "tech": {"software", "technology", "digital", "it", "app", "cloud", "data"},
+                "financial": {"investment", "finance", "loan", "credit", "forex", "crypto"},
+                "construction": {"building", "contractor", "construction", "estate", "property"},
+                "logistics": {"delivery", "courier", "logistics", "transport", "haulage"},
+            }
+            declared = declared_category.lower()
+            expected = category_terms.get(declared, {declared})
+            context = search_context.lower()
+            match = any(term in context for term in expected)
+            competing_finance = declared not in {"financial", "finance"} and any(
+                term in context for term in category_terms["financial"]
+            )
+            category_match = match and not competing_finance
+            agent_log(
+                f"[CHECK] Category vs web presence: declared={declared_category} | "
+                f"LLaMA verdict: {category_match} (deterministic fallback)"
+            )
+            if not category_match and (match or competing_finance):
+                return Flag(
+                    flag_type="category_web_mismatch",
+                    severity=FlagSeverity.HIGH,
+                    detail=f"Declared category '{declared_category}' conflicts with web presence signals.",
+                    source_doc="duckduckgo_search",
+                    evidence=search_context[:200],
+                    check_method="category_keyword_reasoning",
+                )
+            return None
+
+        client = _llama_client()
+        if client is None:
+            raise RuntimeError("NVIDIA_API_KEY is not configured or openai package is unavailable")
+        response = client.chat.completions.create(
+            model=NVIDIA_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=100,
+        )
+        result = _safe_json_parse(response.choices[0].message.content or "") or {}
+        raw_match = result.get("match")
+        category_match = raw_match if isinstance(raw_match, bool) else str(raw_match).lower() == "true"
+        agent_log(
+            f"[CHECK] Category vs web presence: declared={declared_category} | "
+            f"LLaMA verdict: {category_match}"
+        )
+        if not category_match:
+            return Flag(
+                flag_type="category_web_mismatch",
+                severity=FlagSeverity.HIGH,
+                detail=(
+                    f"Declared category '{declared_category}' conflicts with web presence: "
+                    f"{result.get('reason')}"
+                ),
+                source_doc="duckduckgo_search",
+                evidence=search_context[:200],
+                check_method="llm_semantic_reasoning",
+            )
+    except Exception as exc:
+        agent_log(f"Category check failed: {exc}", "warning")
+
+    return None
+
+
+async def _google_search_compatibility(business_name: str, declared_category: str = "") -> ToolResult:
     query = f'"{business_name}" Nigeria'
     data = await _get_json(
         GOOGLE_CUSTOM_SEARCH_URL,
@@ -802,6 +926,9 @@ async def _google_search_compatibility(business_name: str) -> ToolResult:
         status = "weak_footprint"
         confidence = 0.50
         flags.append(_make_flag("weak_web_presence", FlagSeverity.LOW, "Weak web presence", "google_search", query, "google_custom_search"))
+    category_flag = await check_category_web_consistency(business_name, declared_category, items)
+    if category_flag:
+        flags.append(category_flag)
     return ToolResult(
         "duckduckgo_search",
         status,
@@ -815,7 +942,12 @@ async def _google_search_compatibility(business_name: str) -> ToolResult:
     )
 
 
-async def tool_duckduckgo_search(business_name: str, website: str = "", director_name: str = "") -> ToolResult:
+async def tool_duckduckgo_search(
+    business_name: str,
+    website: str = "",
+    director_name: str = "",
+    declared_category: str = "",
+) -> ToolResult:
     """Enhanced web footprint tool — runs multiple search layers for rigorous verification."""
     query = f'"{business_name}" Nigeria'
     social_query = f'"{business_name}" site:linkedin.com OR site:facebook.com OR site:instagram.com OR site:x.com'
@@ -824,7 +956,7 @@ async def tool_duckduckgo_search(business_name: str, website: str = "", director
 
     if settings.GOOGLE_API_KEY and settings.GOOGLE_CX:
         try:
-            result = await _google_search_compatibility(business_name)
+            result = await _google_search_compatibility(business_name, declared_category)
             agent_log(f"   Result: status={result.status} | query={query} | result_count={result.data.get('result_count')}")
             return result
         except Exception as exc:
@@ -940,6 +1072,10 @@ async def tool_duckduckgo_search(business_name: str, website: str = "", director
 
         agent_log(f"   📊 Footprint summary: web={result_count} | social={social_count} ({', '.join(social_platforms) or 'none'}) | director={director_count} | scam={scam_count} | website={'✅' if website_reachable else '❌' if website else 'N/A'}")
         agent_log(f"   📊 Combined footprint score: {footprint_score:.1f} → {status}")
+        category_flag = await check_category_web_consistency(business_name, declared_category, results)
+        if category_flag:
+            flags.append(category_flag)
+
         agent_log(f"   Top titles: {[item.get('title') for item in results[:2]]}")
         return ToolResult(
             "duckduckgo_search",
@@ -1015,7 +1151,7 @@ def _score_agent_flags(flags: list[Flag], tools: list[ToolResult]) -> int:
 
 
 async def _legacy_anthropic_summary(payload: dict[str, Any]) -> tuple[str, ToolResult] | None:
-    if not settings.ANTHROPIC_API_KEY or settings.NVIDIA_API_KEY:
+    if not settings.ANTHROPIC_API_KEY:
         return None
     try:
         data = await _post_json(
@@ -1048,9 +1184,11 @@ async def generate_compliance_summary(tools: list[ToolResult], flags: list[Flag]
         "tools": [tool_result_to_json(tool) for tool in tools],
         "flags": [flag.model_dump() for flag in flags],
     }
-    agent_log("── GENERATING COMPLIANCE SUMMARY via LLaMA...")
+    agent_log("── GENERATING COMPLIANCE SUMMARY...")
     started = time.perf_counter()
     try:
+        if not _use_nvidia_llama():
+            raise RuntimeError(f"NVIDIA summary disabled ({_llm_provider()})")
         text = _call_llama(SUMMARY_SYSTEM_PROMPT, payload, max_tokens=200).strip()
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         agent_log(f"   Summary: {text}")
@@ -1146,7 +1284,12 @@ async def _execute_tool(
     if tool_name == "google_maps":
         return await tool_google_maps(vendor_facts.get("address", ""))
     if tool_name == "duckduckgo_search":
-        return await tool_duckduckgo_search(vendor_facts.get("business_name", ""), vendor_facts.get("website", ""), vendor_facts.get("director_name", ""))
+        return await tool_duckduckgo_search(
+            vendor_facts.get("business_name", ""),
+            vendor_facts.get("website", ""),
+            vendor_facts.get("director_name", ""),
+            vendor_facts.get("business_category", ""),
+        )
     return ToolResult(tool_name, "skipped_unknown_tool", 0.0, {"tool_name": tool_name}, [], False, False, "local")
 
 
@@ -1165,7 +1308,8 @@ async def run_agentic_verification_async(vendor_submission: dict, extracted_fiel
         "nin": vendor_submission.get("nin", ""),
         "address": vendor_submission.get("address", ""),
         "tier": tier,
-        "website": vendor_submission.get("website", ""),
+        "website": vendor_submission.get("website") or vendor_submission.get("website_url", ""),
+        "business_category": vendor_submission.get("business_category", ""),
         "email": vendor_submission.get("email", ""),
         "extracted_fields": extracted_fields,
     }

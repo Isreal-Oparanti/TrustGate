@@ -5,12 +5,11 @@ from app.schemas.verification import VerificationResult
 
 
 class DashboardStats(BaseModel):
-    total_vendors: int
     total_today: int
     approved: int
     pending_review: int
     blocked: int
-    average_score: float
+    avg_score: float
 
 
 class QueueItem(BaseModel):

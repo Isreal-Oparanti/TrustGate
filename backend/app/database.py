@@ -15,6 +15,7 @@ Base = declarative_base()
 
 
 def _redact_database_url(url: str) -> str:
+    """Redact sensitive credentials from database URL for logging."""
     if "@" in url and "://" in url:
         scheme, rest = url.split("://", 1)
         return f"{scheme}://...@{rest.split('@', 1)[1]}"
@@ -22,17 +23,22 @@ def _redact_database_url(url: str) -> str:
 
 
 def verify_database_connection() -> bool:
+    """
+    Verify database connectivity with a simple SELECT 1 query.
+    This is synchronous and safe to run in a thread pool.
+    """
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         db_log(f"✓ Database connected — {_redact_database_url(settings.DATABASE_URL)}")
         return True
     except Exception as exc:
-        db_log(f"Database connection failed: {exc}", "error")
+        db_log(f"✗ Database connection failed: {exc}", "error")
         return False
 
 
 def get_db():
+    """Dependency injection for database sessions in FastAPI routes."""
     db = SessionLocal()
     logger.debug("Database session opened")
     try:

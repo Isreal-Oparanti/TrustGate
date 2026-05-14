@@ -16,7 +16,7 @@ def test_vendor_can_be_created_and_verified():
     vendor_payload = {
         "business_name": "Bright Future Ltd",
         "rc_number": "RC12345",
-        "bvn": "12345678901",
+        "bvn": "22345678901",
         "nin": "10987654321",
         "email": "ops@brightfuture.ng",
         "phone": "08012345678",

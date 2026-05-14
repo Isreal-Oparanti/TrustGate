@@ -1,6 +1,6 @@
 import datetime as dt
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -101,12 +101,24 @@ class AgentVerificationResult(BaseModel):
     recommended_action: str
 
 
+class ExternalCheckOut(BaseModel):
+    id: str
+    name: str
+    status: Literal["confirmed", "fallback", "failed"]
+    detail: str
+    raw: dict = {}
+
+
 class VerificationResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     vendor_id: str
     trust_score: int
+    identity_score: int = 0
+    document_score: int = 0
+    business_score: int = 0
+    behaviour_score: int = 0
     risk_level: str
     verdict: str
     summary: str
@@ -114,10 +126,28 @@ class VerificationResult(BaseModel):
     nlp_notes: Optional[str] = None
     identity_status: str
     anomaly_notes: Optional[str] = None
+    external_checks: List[ExternalCheckOut] = []
+    processing_time_ms: int = 0
     flags: List[FlagOut] = []
     created_at: dt.datetime
+
+
+class VerificationNotStarted(BaseModel):
+    vendor_id: str
+    status: Literal["not_started"]
+    trust_score: None = None
+    verdict: Literal["pending"]
+    message: str
 
 
 class VerificationRunOut(BaseModel):
     verification: VerificationResult
     recommendation: str
+
+
+class VerificationQueued(BaseModel):
+    vendor_id: str
+    status: Literal["queued"]
+    trust_score: None = None
+    verdict: Literal["pending"]
+    message: str

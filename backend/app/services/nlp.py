@@ -144,6 +144,15 @@ SEVERITY_DEDUCTIONS = {
     FlagSeverity.INFO: 0,
 }
 
+CATEGORY_KEYWORDS = {
+    "retail": ["goods", "store", "shop", "merchandise", "product", "sales"],
+    "food": ["restaurant", "food", "catering", "kitchen", "meal", "eatery"],
+    "tech": ["software", "technology", "digital", "it", "system", "app"],
+    "financial": ["investment", "finance", "loan", "credit", "forex", "crypto"],
+    "construction": ["building", "contractor", "construction", "estate", "property"],
+    "logistics": ["delivery", "courier", "logistics", "transport", "haulage"],
+}
+
 
 @dataclass
 class CheckResult:
@@ -188,6 +197,16 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(key)
             output.append(cleaned)
     return output
+
+
+def detect_business_category(text: str) -> list[str]:
+    text_lower = (text or "").lower()
+    detected = []
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        if any(keyword.lower() in text_lower for keyword in keywords):
+            detected.append(category)
+    logger.info("Business category signals detected: %s", detected)
+    return detected
 
 
 def _make_flag(
@@ -382,6 +401,7 @@ class NigerianDocumentFieldExtractor:
             "addresses": [],
             "company_names": [],
             "director_names": [],
+            "business_category_signals": [],
         }
 
         patterns = {
@@ -428,6 +448,7 @@ class NigerianDocumentFieldExtractor:
 
         for key, values in fields.items():
             fields[key] = _dedupe(values)
+        fields["business_category_signals"] = detect_business_category(text)
         return fields
 
     def normalise_rc_number(self, rc: str) -> str:
@@ -1324,11 +1345,15 @@ async def run_nlp_pipeline(ocr_output: dict, vendor_submission: dict) -> NLPResu
 
     logger.info("── STEP 3/7: Named Entity Recognition")
     entities_by_doc = {doc_type: preprocessor.run_ner(data["original"], doc_type) for doc_type, data in docs.items()}
+    category_signals = detect_business_category(" ".join(data["original"] for data in docs.values()))
 
     logger.info("── STEP 4/7: Field Extraction (regex + NER hybrid)")
     extractor = NigerianDocumentFieldExtractor()
     fields_by_doc = {doc_type: extractor.extract_all_fields(data["original"], doc_type) for doc_type, data in docs.items()}
     extracted_fields = _aggregate_fields(fields_by_doc, entities_by_doc)
+    extracted_fields["business_category_signals"] = _dedupe(
+        [*extracted_fields.get("business_category_signals", []), *category_signals]
+    )
     logger.info("   RC numbers found     → %s", extracted_fields["rc_numbers"])
     logger.info("   Company names found  → %s", extracted_fields["company_names"])
     logger.info("   Director names found → %s", extracted_fields["director_names"])
@@ -1446,6 +1471,7 @@ def _aggregate_fields(fields_by_doc: dict[str, dict], entities_by_doc: dict[str,
         "amounts": [],
         "phones": [],
         "locations": [],
+        "business_category_signals": [],
     }
     for fields in fields_by_doc.values():
         aggregate["rc_numbers"].extend(fields.get("rc_numbers", []))
@@ -1455,6 +1481,7 @@ def _aggregate_fields(fields_by_doc: dict[str, dict], entities_by_doc: dict[str,
         aggregate["dates"].extend(fields.get("dates", []))
         aggregate["amounts"].extend(fields.get("amounts", []))
         aggregate["phones"].extend(fields.get("phones", []))
+        aggregate["business_category_signals"].extend(fields.get("business_category_signals", []))
     for entities in entities_by_doc.values():
         aggregate["company_names"].extend(entities.get("ORG", []))
         aggregate["director_names"].extend(entities.get("PERSON", []))
@@ -1525,11 +1552,14 @@ def check_consistency(vendor: Vendor, extracted_text: str) -> tuple[list[dict], 
     vendor_submission = {
         "business_name": vendor.business_name,
         "rc_number": vendor.rc_number or "",
-        "director_name": "",
+        "director_name": vendor.director_name or "",
         "address": vendor.address,
         "bvn": vendor.bvn,
         "nin": vendor.nin,
         "tier": vendor.tier,
+        "business_category": vendor.business_category or "",
+        "website_url": vendor.website_url or "",
+        "expected_monthly_volume": vendor.expected_monthly_volume or 0,
     }
 
     if not extracted_text:
