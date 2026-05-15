@@ -27,6 +27,10 @@ def _extract_account_id(result: dict) -> str | None:
     return data.get("account_id") or data.get("merchant_id") or data.get("id") or result.get("account_id")
 
 
+def _is_mock_squad_id(value: str | None) -> bool:
+    return bool(value and value.startswith("mock_sub_"))
+
+
 async def _create_squad_merchant_for_vendor(vendor_id: str, db: Session):
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
     if not vendor:
@@ -35,10 +39,18 @@ async def _create_squad_merchant_for_vendor(vendor_id: str, db: Session):
         raise HTTPException(status_code=409, detail="Vendor must be approved before Squad merchant creation")
 
     result = await create_sub_merchant(vendor)
-    vendor.squad_merchant_id = _extract_account_id(result)
+    account_id = _extract_account_id(result)
+    vendor.squad_account_id = account_id
+    vendor.squad_merchant_id = account_id
+    vendor.settlement_status = "active" if account_id else "pending"
     db.commit()
     db.refresh(vendor)
-    return {"vendor_id": vendor.id, "squad_merchant_id": vendor.squad_merchant_id, "result": result}
+    return {
+        "vendor_id": vendor.id,
+        "squad_account_id": vendor.squad_account_id,
+        "squad_merchant_id": vendor.squad_merchant_id,
+        "result": result,
+    }
 
 
 def _run_monitor_background(merchant_id: str, transaction_payload: dict) -> None:
@@ -135,6 +147,29 @@ async def create_squad_merchant_by_path(vendor_id: str, db: Session = Depends(ge
     return await _create_squad_merchant_for_vendor(vendor_id, db)
 
 
+@router.post("/sync-mock-merchants")
+async def sync_mock_squad_merchants(db: Session = Depends(get_db)):
+    vendors = (
+        db.query(Vendor)
+        .filter(
+            Vendor.status == "approved",
+            (Vendor.squad_account_id.like("mock_sub_%")) | (Vendor.squad_account_id.is_(None)),
+        )
+        .order_by(Vendor.created_at.desc())
+        .all()
+    )
+
+    synced = []
+    failed = []
+    for vendor in vendors:
+        try:
+            synced.append(await _create_squad_merchant_for_vendor(vendor.id, db))
+        except Exception as exc:
+            failed.append({"vendor_id": vendor.id, "business_name": vendor.business_name, "error": str(exc)})
+
+    return {"synced": synced, "failed": failed, "total": len(vendors)}
+
+
 @router.get("/merchant/{vendor_id}")
 def get_squad_merchant_status(vendor_id: str, db: Session = Depends(get_db)):
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
@@ -142,7 +177,9 @@ def get_squad_merchant_status(vendor_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Vendor not found")
     return {
         "vendor_id": vendor.id,
-        "has_squad_merchant": bool(vendor.squad_merchant_id),
+        "has_squad_merchant": bool(vendor.squad_account_id or vendor.squad_merchant_id),
+        "is_mock_merchant": _is_mock_squad_id(vendor.squad_account_id) or _is_mock_squad_id(vendor.squad_merchant_id),
+        "squad_account_id": vendor.squad_account_id,
         "squad_merchant_id": vendor.squad_merchant_id,
         "status": vendor.status,
     }

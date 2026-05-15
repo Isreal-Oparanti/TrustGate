@@ -130,4 +130,14 @@ app.include_router(admin.router, prefix=f"{settings.API_V1_PREFIX}/admin", tags=
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "database_connected": verify_database_connection()}
+    squad_enabled = bool(settings.SQUAD_SECRET_KEY) and not settings.SQUAD_MOCK_MODE
+    return {
+        "status": "ok",
+        "database_connected": verify_database_connection(),
+        "squad": {
+            "enabled": squad_enabled,
+            "mock_mode": settings.SQUAD_MOCK_MODE,
+            "base_url": settings.SQUAD_API_BASE_URL,
+            "has_secret_key": bool(settings.SQUAD_SECRET_KEY),
+        },
+    }

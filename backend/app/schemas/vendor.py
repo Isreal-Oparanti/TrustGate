@@ -79,6 +79,11 @@ class VendorCreate(BaseModel):
         return normalized
 
 
+class VendorLogin(BaseModel):
+    business_name: str = Field(min_length=1)
+    rc_number: str = Field(min_length=1)
+
+
 class VendorStatusUpdate(BaseModel):
     status: VerdictEnum
 

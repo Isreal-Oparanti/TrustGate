@@ -14,6 +14,7 @@ from app.schemas.vendor import (
     TierEnum,
     VendorCreate,
     VendorCreateResponse,
+    VendorLogin,
     VendorOut,
     VendorStatusUpdate,
 )
@@ -92,6 +93,11 @@ def _extract_squad_account_id(squad_response: dict[str, Any]) -> str | None:
     return squad_response.get("account_id") or squad_response.get("merchant_id") or squad_response.get("id")
 
 
+def _needs_squad_sync(vendor: Vendor) -> bool:
+    squad_id = vendor.squad_account_id or vendor.squad_merchant_id
+    return not squad_id or squad_id.startswith("mock_sub_")
+
+
 def _sync_vendor_to_squad_sub_merchant(vendor: Vendor, db: Session) -> dict[str, Any]:
     try:
         squad_response = create_merchant(vendor)
@@ -100,9 +106,8 @@ def _sync_vendor_to_squad_sub_merchant(vendor: Vendor, db: Session) -> dict[str,
         raise HTTPException(status_code=502, detail=f"Squad sub-merchant creation failed: {exc}") from exc
 
     vendor.squad_account_id = _extract_squad_account_id(squad_response)
+    vendor.squad_merchant_id = vendor.squad_account_id
     vendor.settlement_status = "active" if vendor.squad_account_id else "pending"
-    if vendor.squad_account_id:
-        vendor.status = "approved"
     db.commit()
     db.refresh(vendor)
     return squad_response
@@ -159,11 +164,32 @@ def create_vendor(
     )
     db_log(f"→ Saving vendor: {vendor.business_name} | tier: {vendor.tier} | id: {vendor.id}")
     db.add(vendor)
-    db.flush()
-
-    squad_response = _sync_vendor_to_squad_sub_merchant(vendor, db)
+    db.commit()
+    db.refresh(vendor)
     db_log(f"✓ Vendor saved - id: {vendor.id}")
-    return {"vendor": vendor, "squad_response": squad_response}
+    return {
+        "vendor": vendor,
+        "squad_response": {"message": "Vendor saved pending approval. Squad sync will run after approval."},
+    }
+
+
+@router.post("/login", response_model=VendorOut)
+def login_vendor(payload: VendorLogin, db: Session = Depends(get_db)):
+    business_name = " ".join(payload.business_name.split())
+    rc_number = (payload.rc_number or "").strip()
+    vendor = (
+        db.query(Vendor)
+        .filter(
+            func.lower(Vendor.business_name) == business_name.lower(),
+            func.lower(func.coalesce(Vendor.rc_number, "")) == rc_number.lower(),
+        )
+        .first()
+    )
+    if not vendor:
+        raise HTTPException(status_code=401, detail="Business name or RC number is incorrect")
+    if vendor.status != "approved":
+        raise HTTPException(status_code=403, detail="Vendor must be approved before accessing the vendor portal")
+    return vendor
 
 
 @router.get("/", response_model=list[VendorOut])
@@ -199,6 +225,12 @@ def update_vendor_status(vendor_id: str, payload: VendorStatusUpdate, db: Sessio
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     vendor.status = payload.status.value
+
+    if payload.status.value == "approved" and _needs_squad_sync(vendor):
+        db.flush()
+        _sync_vendor_to_squad_sub_merchant(vendor, db)
+        return vendor
+
     db.commit()
     db.refresh(vendor)
     return vendor

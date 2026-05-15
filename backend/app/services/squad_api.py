@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
@@ -46,6 +47,13 @@ def _provider_mobile(value: str) -> str:
 
 def _amount_naira(amount_kobo: int | float | None) -> float:
     return float(amount_kobo or 0) / 100
+
+
+def _frontend_base_url(callback_url: str | None = None) -> str:
+    parsed = urlsplit(callback_url or settings.PAYMENT_CALLBACK_URL)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "http://localhost:3000"
 
 
 async def _request_json(method: str, path: str, *, json_payload: dict | None = None, params: dict | None = None) -> dict:
@@ -178,7 +186,7 @@ def query_merchant_virtual_account_transactions(params: dict) -> dict:
 def initiate_payment(payload: dict) -> dict:
     if not _squad_enabled():
         transaction_ref = payload["transaction_ref"]
-        checkout_url = f"https://sandbox-pay.squadco.com/{transaction_ref}"
+        checkout_url = f"{_frontend_base_url(payload.get('callback_url'))}/checkout/{transaction_ref}"
         logger.info("🟢 Squad mock payment initiated for ref %s", transaction_ref)
         return {
             "mode": "mock",

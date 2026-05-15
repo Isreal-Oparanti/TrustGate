@@ -1,8 +1,8 @@
 import uuid
 from app.database import SessionLocal, verify_database_connection
 from fastapi import HTTPException
-from app.routers.vendors import create_vendor
-from app.schemas.vendor import VendorCreate
+from app.routers.vendors import create_vendor, update_vendor_status
+from app.schemas.vendor import VendorCreate, VendorStatusUpdate
 from app.services import squad_api
 
 
@@ -12,14 +12,14 @@ def test_healthcheck_database_connection():
 
 def test_vendor_can_be_created_under_platform(monkeypatch):
     monkeypatch.setattr(squad_api.settings, "SQUAD_MOCK_MODE", True)
-    suffix = uuid.uuid4().hex[:8]
+    suffix = f"{uuid.uuid4().int % 1_000_000:06d}"
     db = SessionLocal()
     try:
         result = create_vendor(
             payload=VendorCreate(
                 business_name=f"Bright Future {suffix} Ltd",
                 rc_number=f"RC{suffix}",
-                bvn="12345678901",
+                bvn="22345678901",
                 nin="10987654321",
                 email=f"ops-{suffix}@brightfuture.ng",
                 phone="08012345678",
@@ -36,21 +36,31 @@ def test_vendor_can_be_created_under_platform(monkeypatch):
         )
 
         assert result["vendor"].business_name == f"Bright Future {suffix} Ltd"
-        assert result["vendor"].squad_account_id
-        assert result["squad_response"]["success"] is True
+        assert result["vendor"].status == "pending"
+        assert result["vendor"].squad_account_id is None
+        assert "pending approval" in result["squad_response"]["message"]
+
+        approved_vendor = update_vendor_status(
+            result["vendor"].id,
+            VendorStatusUpdate(status="approved"),
+            db=db,
+        )
+        assert approved_vendor.status == "approved"
+        assert approved_vendor.squad_account_id
+        assert approved_vendor.settlement_status == "active"
     finally:
         db.close()
 
 
 def test_vendor_rejects_duplicate_business_name(monkeypatch):
     monkeypatch.setattr(squad_api.settings, "SQUAD_MOCK_MODE", True)
-    suffix = uuid.uuid4().hex[:8]
+    suffix = f"{uuid.uuid4().int % 1_000_000:06d}"
     db = SessionLocal()
     try:
         payload = VendorCreate(
             business_name=f"Unique Demo {suffix} Ltd",
             rc_number=f"RC{suffix}",
-            bvn="12345678901",
+            bvn="22345678901",
             nin="10987654321",
             email=f"unique-{suffix}@example.ng",
             phone="08012345678",
