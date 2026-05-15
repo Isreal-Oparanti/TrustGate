@@ -1,8 +1,11 @@
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from dateutil import parser
 from rapidfuzz import fuzz
+from app.config import settings
+from app.models.document import Document
 from app.models.flag import Flag
 from app.models.vendor import Vendor
 from app.models.verification import Verification
@@ -12,7 +15,7 @@ from app.services.identity import verify_identity
 from app.services.nlp import NigerianDocumentFieldExtractor, check_consistency
 from app.services.ocr import TrustGateOCR
 from app.schemas.verification import OCRBatchResult
-from app.utils.logger import db_log
+from app.utils.logger import agent_log, db_log
 
 
 def _legacy_flag_severity(flag: dict) -> int:
@@ -123,7 +126,13 @@ def calculate_trust_score(flags: list[dict]) -> tuple[int, str, str]:
 def _external_check_status(tool) -> str:
     status = (tool.status or "").lower()
     provider = (tool.provider or "").lower()
-    if tool.external_call_failed or "failed" in status or "not_found" in status:
+    evidence = tool.evidence or {}
+    flag_count = int(evidence.get("flag_count") or 0)
+    if flag_count > 0:
+        return "failed"
+    if tool.external_call_failed:
+        return "fallback"
+    if "failed" in status or "not_found" in status or "mismatch" in status:
         return "failed" if tool.confidence < 0.45 else "fallback"
     if "fallback" in status or "fallback" in provider or "local" in status or "local" in provider:
         return "fallback"
@@ -140,30 +149,48 @@ def _tool_label(tool_name: str) -> str:
     }.get(tool_name, tool_name.replace("_", " ").title())
 
 
+def _clean_external_detail(value: str, fallback: str) -> str:
+    detail = (value or "").strip()
+    if not detail:
+        return fallback
+    if any(token in detail.lower() for token in ("http://", "https://", "client error", "server error", "bad request")):
+        return fallback
+    if any(code in detail for code in ("400", "401", "403", "404")):
+        return fallback
+    return detail
+
+
 def _external_checks(agent_result) -> list[dict]:
     checks = []
     for tool in agent_result.tools_called:
         if tool.tool_name == "llm_summary":
             continue
         evidence = tool.evidence or {}
-        failure = evidence.get("failure_reason")
-        if failure:
-            detail = f"{tool.status.replace('_', ' ').title()} - {str(failure)[:120]}"
-        elif tool.notes:
-            detail = tool.notes
-        else:
-            detail = tool.status.replace("_", " ").title()
+        status = _external_check_status(tool)
+        fallback_detail = (
+            "Validated locally — external service unavailable"
+            if status == "fallback"
+            else "External verification requires review"
+        )
+        detail = _clean_external_detail(tool.display_message or tool.notes or tool.status.replace("_", " ").title(), fallback_detail)
+        safe_evidence = {
+            key: value
+            for key, value in evidence.items()
+            if key not in {"failure_reason", "technical_error"}
+        }
         checks.append(
             {
                 "id": tool.tool_name,
                 "name": _tool_label(tool.tool_name),
-                "status": _external_check_status(tool),
+                "status": status,
                 "detail": detail,
                 "raw": {
                     "status": tool.status,
                     "confidence": tool.confidence,
                     "provider": tool.provider,
-                    "evidence": evidence,
+                    "external_call_failed": tool.external_call_failed,
+                    "display_message": detail,
+                    "evidence": safe_evidence,
                     "notes": tool.notes,
                 },
             }
@@ -179,12 +206,75 @@ def recommendation_for(verdict: str) -> str:
     return "Block onboarding until identity and business evidence are resolved."
 
 
+def _doc_type_from_filename(file_name: str) -> str | None:
+    filename_lower = file_name.lower()
+    if "cac" in filename_lower:
+        return "cac_certificate"
+    if "utility" in filename_lower or "bill" in filename_lower:
+        return "utility_bill"
+    if "director" in filename_lower or "id" in filename_lower:
+        return "directors_id"
+    return None
+
+
+def _resolve_document_path(doc: Document) -> str | None:
+    upload_dir = Path(settings.UPLOAD_DIR) / doc.vendor_id
+    candidates = [Path(doc.path), upload_dir / doc.filename, upload_dir / Path(doc.path).name]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _scan_upload_dir_for_documents(vendor_id: str) -> dict[str, str]:
+    upload_dir = Path(settings.UPLOAD_DIR) / vendor_id
+    if not upload_dir.exists():
+        db_log(f"No document files found in uploads/{vendor_id}/ — NLP will flag missing_all_documents", "warning")
+        return {}
+
+    files = [file for file in upload_dir.iterdir() if file.is_file()]
+    if not files:
+        db_log(f"No document files found in uploads/{vendor_id}/ — NLP will flag missing_all_documents", "warning")
+        return {}
+
+    document_paths: dict[str, str] = {}
+    for file in files:
+        doc_type = _doc_type_from_filename(file.name)
+        if doc_type:
+            document_paths[doc_type] = str(file)
+    return document_paths
+
+
+def _document_paths_for_vendor(db, vendor: Vendor) -> dict[str, str]:
+    document_paths: dict[str, str] = {}
+    documents = (
+        db.query(Document)
+        .filter(Document.vendor_id == vendor.id)
+        .order_by(Document.uploaded_at.desc())
+        .all()
+    )
+    for doc in documents:
+        if not doc.doc_type:
+            continue
+        resolved = _resolve_document_path(doc)
+        if resolved:
+            document_paths[doc.doc_type] = resolved
+        else:
+            db_log(f"Document metadata path missing for {doc.doc_type}: {doc.path}", "warning")
+
+    if document_paths:
+        return document_paths
+
+    if documents:
+        db_log(f"Document metadata exists for vendor {vendor.id}, but files were not found; scanning upload directory", "warning")
+    return _scan_upload_dir_for_documents(vendor.id)
+
+
 async def run_verification(db, vendor: Vendor) -> Verification:
     started = time.perf_counter()
-    document_paths = {doc.doc_type: doc.path for doc in vendor.documents if doc.doc_type} if vendor.documents else {}
+    document_paths = _document_paths_for_vendor(db, vendor)
     
     if not document_paths:
-        db_log(f"No documents found for vendor {vendor.id} — NLP will run with empty input")
         ocr_result = OCRBatchResult(
             vendor_id=vendor.id,
             documents={},
@@ -195,6 +285,15 @@ async def run_verification(db, vendor: Vendor) -> Verification:
     else:
         ocr_engine = TrustGateOCR()
         ocr_result = await ocr_engine.process_vendor_documents(vendor.id, document_paths)
+
+    if not ocr_result.documents and document_paths:
+        agent_log(f"WARNING: OCR produced no document results for vendor {vendor.id}", "warning")
+    for doc_type, ocr_doc_result in ocr_result.documents.items():
+        char_count = len(ocr_doc_result.raw_text.strip())
+        confidence = ocr_doc_result.confidence_score
+        agent_log(f"OCR result: {doc_type} | chars={char_count} | confidence={confidence:.2f}")
+        if char_count < 50:
+            agent_log(f"WARNING: Very short OCR text for {doc_type} — may indicate extraction failure", "warning")
 
     extracted_text = "\n\n".join([res.raw_text for res in ocr_result.documents.values() if res.raw_text])
     
@@ -251,7 +350,7 @@ async def run_verification(db, vendor: Vendor) -> Verification:
             has_web = float(tool.evidence.get("footprint_score", 0.0)) / 10.0
             has_web = min(1.0, max(has_web, 0.8 if tool.status == "strong_footprint" else 0.0))
         elif tool.tool_name == "google_maps":
-            addr_spec = 1.0 if tool.status == "precise_match" else (0.5 if tool.status == "found" else 0.0)
+            addr_spec = 1.0 if tool.status in {"precise_match", "confirmed"} else (0.5 if tool.status == "found" else 0.0)
             
     ml_features = {
         "registration_age_days": age_days,

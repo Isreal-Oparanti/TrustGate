@@ -69,6 +69,7 @@ async def upload_document(
         filename=filename,
         content_type=file.content_type or "application/octet-stream",
         path=path,
+        file_size_kb=file_size_kb,
     )
     db.add(document)
 

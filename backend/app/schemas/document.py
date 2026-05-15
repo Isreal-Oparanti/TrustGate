@@ -11,4 +11,5 @@ class DocumentOut(BaseModel):
     filename: str
     content_type: str
     path: str
+    file_size_kb: int | None = None
     uploaded_at: dt.datetime

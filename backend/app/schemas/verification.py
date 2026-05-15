@@ -88,6 +88,8 @@ class AgentToolResult(BaseModel):
     provider: str
     external_call_used: bool
     external_call_failed: bool = False
+    display_message: str = ""
+    technical_error: str = ""
     evidence: dict
     notes: str
 

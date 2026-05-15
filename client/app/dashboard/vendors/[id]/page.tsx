@@ -90,6 +90,33 @@ function buildExternalChecks(vendor: VendorListItem, checks?: ExternalCheck[]): 
   ];
 }
 
+const TECHNICAL_ERROR_PATTERN = /(https?:\/\/|client error|server error|bad request|unauthorized|forbidden|not found|\b(?:400|401|403|404)\b)/i;
+
+function cleanExternalDetail(check: ExternalCheck): string {
+  const rawMessage = typeof check.raw?.display_message === "string" ? check.raw.display_message : check.detail;
+  const fallback =
+    check.status === "fallback"
+      ? "Validated locally — external service unavailable"
+      : "External verification requires review";
+  if (!rawMessage || TECHNICAL_ERROR_PATTERN.test(rawMessage)) return fallback;
+  return rawMessage;
+}
+
+function sanitizeExternalRaw(value: unknown): unknown {
+  if (typeof value === "string") {
+    return TECHNICAL_ERROR_PATTERN.test(value) ? "Technical error hidden from UI" : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeExternalRaw(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !["technical_error", "failure_reason"].includes(key))
+        .map(([key, item]) => [key, sanitizeExternalRaw(item)]),
+    );
+  }
+  return value;
+}
+
 function ExternalChecks({ checks }: { checks: ExternalCheck[] }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -100,6 +127,8 @@ function ExternalChecks({ checks }: { checks: ExternalCheck[] }) {
           check.status === "confirmed" ? CheckCircle : check.status === "fallback" ? TriangleAlert : XCircle;
         const color =
           check.status === "confirmed" ? "#0D9B68" : check.status === "fallback" ? "#D97706" : "#DC2626";
+        const detail = cleanExternalDetail(check);
+        const safeRaw = sanitizeExternalRaw(check.raw || check);
 
         return (
           <button
@@ -112,10 +141,10 @@ function ExternalChecks({ checks }: { checks: ExternalCheck[] }) {
               <Icon className="h-4 w-4" style={{ color }} />
               <span className="text-[13px] font-semibold text-[#0B3142]">{check.name}</span>
             </div>
-            <p className="mt-1 text-[12px] text-[#4A6B7C]">{check.detail}</p>
+            <p className="mt-1 text-[12px] text-[#4A6B7C]">{detail}</p>
             {open === check.id ? (
               <pre className="mt-3 max-h-36 overflow-auto rounded-lg bg-[#F2F4F6] p-3 text-[11px] text-[#0B3142]">
-                {JSON.stringify(check.raw || check, null, 2)}
+                {JSON.stringify(safeRaw, null, 2)}
               </pre>
             ) : null}
           </button>

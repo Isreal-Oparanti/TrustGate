@@ -63,7 +63,7 @@ try:
             "payment_security_answer_hash": "VARCHAR",
         },
     )
-    _ensure_columns("documents", {"doc_type": "VARCHAR"})
+    _ensure_columns("documents", {"doc_type": "VARCHAR", "file_size_kb": "INTEGER"})
     _ensure_columns(
         "verifications",
         {
@@ -83,6 +83,7 @@ except Exception as exc:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        agent_log("LLM provider: openai | model: gpt-4o-mini")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as executor:
             db_ok = await loop.run_in_executor(executor, verify_database_connection)

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from openai import OpenAI
 
 from app.config import settings
 from app.schemas.verification import AgentToolResult, AgentVerificationResult, Flag, FlagSeverity
@@ -32,26 +33,20 @@ except ImportError:
         DuckDuckGoSearchException = Exception
 
 try:
-    from openai import OpenAI
-except Exception:  # pragma: no cover
-    OpenAI = None
-
-try:
     from rapidfuzz import fuzz
 except Exception:  # pragma: no cover
     fuzz = None
 
 
-NVIDIA_MODEL = "meta/llama-3.1-8b-instruct"
-NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DOJAH_BASE_URL = "https://sandbox.dojah.io"
-DOJAH_BVN_URL = f"{DOJAH_BASE_URL}/api/v1/kyc/bvn"
-DOJAH_NIN_URL = f"{DOJAH_BASE_URL}/api/v1/kyc/nin"
+llm_client = OpenAI(api_key=settings.OPENAI_API_KEY, http_client=httpx.Client(timeout=8.0))
+LLM_MODEL = "gpt-4o-mini"
+DOJAH_BVN_URL = "https://api.dojah.io/api/v1/kyc/bvn"
+DOJAH_NIN_URL = "https://api.dojah.io/api/v1/kyc/nin"
 CAC_SEARCH_URL = "https://search.cac.gov.ng/home"
 GOOGLE_MAPS_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 
 # Compatibility constants used by the existing regression test. The new primary
-# footprint and summary providers are DuckDuckGo and NVIDIA LLaMA.
+# footprint and summary providers are DuckDuckGo and OpenAI.
 GOOGLE_CUSTOM_SEARCH_URL = "https://www.googleapis.com/customsearch/v1"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -117,8 +112,11 @@ class ToolResult:
     external_call_failed: bool = False
     provider: str = ""
     notes: str = ""
+    display_message: str = ""
+    technical_error: str = ""
 
     def to_agent_tool_result(self) -> AgentToolResult:
+        display_message = self.display_message or self.notes or self.status.replace("_", " ").title()
         return AgentToolResult(
             tool_name=self.tool_name,
             fact_type=self.tool_name,
@@ -127,7 +125,9 @@ class ToolResult:
             provider=self.provider or self.tool_name,
             external_call_used=self.external_call_made and not self.external_call_failed,
             external_call_failed=self.external_call_failed,
-            evidence={**self.data, "external_call_failed": self.external_call_failed},
+            display_message=display_message,
+            technical_error=self.technical_error,
+            evidence={**self.data, "external_call_failed": self.external_call_failed, "flag_count": len(self.flags)},
             notes=self.notes,
         )
 
@@ -265,60 +265,46 @@ def _safe_json_parse(raw: str) -> dict[str, Any] | None:
     return None
 
 
-def _llama_client():
-    if not settings.NVIDIA_API_KEY or OpenAI is None:
-        return None
-    return OpenAI(
-        base_url=NVIDIA_BASE_URL,
-        api_key=settings.NVIDIA_API_KEY,
-        timeout=8.0,
-        max_retries=0,
-        http_client=httpx.Client(timeout=8.0),
-    )
-
-
 def _llm_provider() -> str:
-    return (settings.LLM_EXPLANATION_PROVIDER or "local_template").lower()
+    return (settings.LLM_PROVIDER or settings.LLM_EXPLANATION_PROVIDER or "openai").lower()
 
 
-def _use_nvidia_llama() -> bool:
-    return bool(settings.NVIDIA_API_KEY) and _llm_provider() in {"nvidia", "nvidia_llama", "llama", "nvidia_agentic", "agentic_llm"}
+def _use_openai_llm() -> bool:
+    return bool(settings.OPENAI_API_KEY) and _llm_provider() == "openai"
 
 
 def _use_llm_planning() -> bool:
-    return bool(settings.NVIDIA_API_KEY) and _llm_provider() in {"nvidia_agentic", "agentic_llm"}
+    return _use_openai_llm()
 
 
-def _call_llama(system_prompt: str, user_payload: dict[str, Any], *, max_tokens: int) -> str:
-    client = _llama_client()
-    if client is None:
-        raise RuntimeError("NVIDIA_API_KEY is not configured or openai package is unavailable")
-    completion = client.chat.completions.create(
-        model=NVIDIA_MODEL,
-        messages=[
+def _call_openai_llm(
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    *,
+    max_tokens: int,
+    json_response: bool,
+) -> str:
+    if not _use_openai_llm():
+        raise RuntimeError("OPENAI_API_KEY is not configured or LLM_PROVIDER is not openai")
+    kwargs: dict[str, Any] = {
+        "model": LLM_MODEL,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(user_payload, default=str)},
         ],
-        temperature=0.3,
-        max_tokens=max_tokens,
-        stream=False,
-    )
-    choice = completion.choices[0]
-    content = choice.message.content or ""
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+    }
+    if json_response:
+        kwargs["response_format"] = {"type": "json_object"}
+    completion = llm_client.chat.completions.create(**kwargs)
+    return completion.choices[0].message.content or ""
 
-    # Nemotron is a thinking model — if content is empty, the answer
-    # may be inside reasoning_content (the model "thinks" then answers).
-    if not content.strip():
-        reasoning = getattr(choice.message, "reasoning_content", None) or ""
-        if reasoning:
-            # Try to extract JSON from the thinking text
-            json_match = re.search(r"\{.*\}", reasoning, flags=re.DOTALL)
-            if json_match:
-                content = json_match.group(0)
-            else:
-                content = reasoning
 
-    return content or ""
+def _call_llama(system_prompt: str, user_payload: dict[str, Any], *, max_tokens: int) -> str:
+    """Backward-compatible alias for old demo scripts."""
+    return _call_openai_llm(system_prompt, user_payload, max_tokens=max_tokens, json_response=True)
+
 
 
 def _default_plan(vendor_facts: dict[str, Any], reason: str = "fallback") -> dict[str, Any]:
@@ -352,14 +338,16 @@ def generate_verification_plan(vendor_facts: dict[str, Any]) -> dict[str, Any]:
         agent_log(f"   Plan: {_plan_summary(plan.get('plan', []))}")
         return plan
 
-    agent_log("── PLANNING: Calling LLaMA to generate verification plan...")
+    agent_log("── PLANNING: Calling OpenAI to generate verification plan...")
     try:
-        parsed = _safe_json_parse(_call_llama(PLANNING_SYSTEM_PROMPT, vendor_facts, max_tokens=512))
+        parsed = _safe_json_parse(
+            _call_openai_llm(PLANNING_SYSTEM_PROMPT, vendor_facts, max_tokens=512, json_response=True)
+        )
         if not parsed or not isinstance(parsed.get("plan"), list):
-            raise ValueError("LLaMA plan response was not valid plan JSON")
+            raise ValueError("OpenAI plan response was not valid plan JSON")
         plan = parsed
     except Exception as exc:
-        agent_log(f"   LLaMA unavailable — reason: {type(exc).__name__} | using default plan", "warning")
+        agent_log(f"   OpenAI unavailable — reason: {type(exc).__name__} | using default plan", "warning")
         plan = _default_plan(vendor_facts, str(exc))
     agent_log("── PLAN RECEIVED:")
     agent_log(f"   Hypothesis: {plan.get('risk_hypothesis', 'unknown')}")
@@ -381,9 +369,11 @@ def reason_about_tool(tool_result: ToolResult) -> dict[str, Any]:
 
     payload = {tool_result.tool_name: tool_result_to_json(tool_result)}
     try:
-        parsed = _safe_json_parse(_call_llama(REASONING_SYSTEM_PROMPT, payload, max_tokens=512))
+        parsed = _safe_json_parse(
+            _call_openai_llm(REASONING_SYSTEM_PROMPT, payload, max_tokens=512, json_response=True)
+        )
         if not parsed:
-            raise ValueError("LLaMA reasoning response was not valid JSON")
+            raise ValueError("OpenAI reasoning response was not valid JSON")
         return {
             "finding": parsed.get("finding", "No finding returned."),
             "risk_delta": parsed.get("risk_delta", "unchanged"),
@@ -397,7 +387,7 @@ def reason_about_tool(tool_result: ToolResult) -> dict[str, Any]:
         return {
             "finding": f"{tool_result.tool_name} returned status={tool_result.status}.",
             "risk_delta": risk_delta,
-            "risk_delta_reason": f"Fallback deterministic reasoning because LLaMA was unavailable: {exc}",
+            "risk_delta_reason": f"Fallback deterministic reasoning because OpenAI was unavailable: {exc}",
             "continue_plan": not any(flag.severity == FlagSeverity.CRITICAL for flag in tool_result.flags),
             "override_next_tool": None,
             "flag_raised": None,
@@ -410,6 +400,7 @@ def tool_result_to_json(tool_result: ToolResult) -> dict[str, Any]:
         "status": tool_result.status,
         "confidence": tool_result.confidence,
         "provider": tool_result.provider,
+        "display_message": tool_result.display_message or tool_result.notes,
         "data": tool_result.data,
         "flags": [flag.model_dump() for flag in tool_result.flags],
         "external_call_made": tool_result.external_call_made,
@@ -419,6 +410,7 @@ def tool_result_to_json(tool_result: ToolResult) -> dict[str, Any]:
 
 def _local_identity_fallback(tool_name: str, reason: str, bvn_or_nin: str) -> ToolResult:
     valid = bool(re.fullmatch(r"\d{11}", bvn_or_nin or ""))
+    label = "BVN" if tool_name == "dojah_bvn" else "NIN"
     flags = []
     if not valid:
         flags.append(
@@ -441,6 +433,12 @@ def _local_identity_fallback(tool_name: str, reason: str, bvn_or_nin: str) -> To
         external_call_failed=True,
         provider=f"{tool_name}_local_fallback",
         notes="External identity call failed; local format fallback used.",
+        display_message=(
+            f"Identity format validated locally — external {label} database unavailable"
+            if valid
+            else f"{label} format is invalid for provider verification"
+        ),
+        technical_error=reason,
     )
 
 
@@ -527,7 +525,8 @@ async def tool_dojah_bvn(bvn: str, director_name: str) -> ToolResult:
             external_call_made=True,
             external_call_failed=False,
             provider="dojah_bvn",
-            notes="BVN checked through Dojah sandbox." if sandbox_mode else "BVN checked through Dojah production.",
+            notes="BVN checked through Dojah API.",
+            display_message="BVN identity verified through Dojah" if not flags else "BVN identity returned a mismatch",
         )
     except Exception as exc:
         agent_log(f"   Dojah BVN failed — using fallback: {exc}", "warning")
@@ -573,7 +572,8 @@ async def tool_dojah_nin(nin: str, bvn_name: str) -> ToolResult:
             external_call_made=True,
             external_call_failed=False,
             provider="dojah_nin",
-            notes="NIN checked through Dojah sandbox.",
+            notes="NIN checked through Dojah API.",
+            display_message="NIN identity verified through Dojah" if not flags else "NIN identity returned a mismatch",
         )
     except Exception as exc:
         agent_log(f"   Dojah NIN failed — using fallback: {exc}", "warning")
@@ -656,6 +656,12 @@ def _cac_local_fallback(
         external_call_failed=True,
         provider="cac_local_fallback",
         notes="CAC scrape unavailable; local heuristic fallback used.",
+        display_message=(
+            "RC number format valid — CAC live registry temporarily unavailable"
+            if status == "locally_consistent"
+            else "CAC registry evidence requires review"
+        ),
+        technical_error=reason,
     )
 
 
@@ -721,6 +727,7 @@ async def tool_cac_registry(
             external_call_failed=False,
             provider="cac_public_registry",
             notes="CAC public registry scrape completed.",
+            display_message="CAC registry details verified" if not flags else "CAC registry details returned inconsistencies",
         )
     except Exception as exc:
         agent_log(f"   CAC scrape unavailable — using local fallback: {exc}", "warning")
@@ -728,6 +735,122 @@ async def tool_cac_registry(
 
 
 async def tool_google_maps(address: str) -> ToolResult:
+    agent_log(f"   Input: address {address}")
+    if settings.GOOGLE_MAPS_API_KEY:
+        try:
+            data = await _get_json(
+                GOOGLE_MAPS_GEOCODE_URL,
+                params={"address": f"{address}, Nigeria", "key": settings.GOOGLE_MAPS_API_KEY},
+            )
+            results = data.get("results") or []
+            if results:
+                top = results[0]
+                formatted = top.get("formatted_address", "")
+                geometry = top.get("geometry") or {}
+                location = geometry.get("location") or {}
+                location_type = geometry.get("location_type") or "UNKNOWN"
+                country_ok = "nigeria" in formatted.lower()
+                flags: list[Flag] = []
+                if not country_ok:
+                    flags.append(
+                        _make_flag(
+                            "address_outside_nigeria",
+                            FlagSeverity.CRITICAL,
+                            "Address resolves outside Nigeria",
+                            "google_maps",
+                            formatted,
+                            "google_geocode_country_check",
+                        )
+                    )
+                status = "confirmed" if country_ok and not flags else "failed"
+                agent_log(
+                    f"   Result: status={status} | formatted={formatted} | precision={location_type} | "
+                    f"lat={location.get('lat')} lng={location.get('lng')}"
+                )
+                return ToolResult(
+                    "google_maps",
+                    status,
+                    0.88 if status == "confirmed" else 0.30,
+                    {
+                        "formatted_address": formatted,
+                        "location_type": location_type,
+                        "lat": location.get("lat"),
+                        "lng": location.get("lng"),
+                        "country_confirmed": country_ok,
+                        "result_count": len(results),
+                    },
+                    flags,
+                    True,
+                    False,
+                    "google_maps",
+                    "Google Maps Geocoding completed.",
+                    display_message=f"Address confirmed: {formatted}" if status == "confirmed" else "Address resolves outside Nigeria",
+                )
+            agent_log("   Google Maps returned 0 results; trying Nominatim fallback", "warning")
+        except Exception as exc:
+            agent_log(f"   Google Maps failed; trying Nominatim fallback: {exc}", "warning")
+
+    try:
+        data = await _get_json(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{address}, Nigeria", "format": "json", "limit": 1, "countrycodes": "ng"},
+            headers={"User-Agent": "TrustGate-Verification/1.0"},
+        )
+        if data:
+            top = data[0]
+            formatted = top.get("display_name", "")
+            agent_log(f"Address found via Nominatim: {formatted}")
+            return ToolResult(
+                "google_maps",
+                "confirmed",
+                0.75,
+                {
+                    "formatted_address": formatted,
+                    "lat": top.get("lat"),
+                    "lon": top.get("lon"),
+                    "lng": top.get("lon"),
+                    "display_name": formatted,
+                    "result_count": len(data),
+                },
+                [],
+                True,
+                False,
+                "nominatim_maps",
+                "Nominatim address fallback completed.",
+                display_message=f"Address confirmed: {formatted}",
+            )
+    except Exception as exc:
+        agent_log(f"Nominatim fallback failed: {exc}", "warning")
+        return ToolResult(
+            "google_maps",
+            "not_found",
+            0.30,
+            {"address": address, "external_call_failed": True},
+            [],
+            True,
+            True,
+            "nominatim_maps",
+            "Address could not be confirmed externally.",
+            display_message="Address could not be confirmed externally",
+            technical_error=str(exc),
+        )
+
+    agent_log("   Result: status=not_found | provider=nominatim_maps | results=0")
+    return ToolResult(
+        "google_maps",
+        "not_found",
+        0.30,
+        {"address": address, "result_count": 0, "external_call_failed": True},
+        [],
+        True,
+        True,
+        "nominatim_maps",
+        "Address could not be confirmed externally.",
+        display_message="Address could not be confirmed externally",
+    )
+
+
+async def _tool_google_maps_legacy(address: str) -> ToolResult:
     agent_log(f"   Input: address {address}")
     try:
         # Nominatim OpenStreetMap fallback since Maps JS API requires frontend and Geocoding requires billing
@@ -837,7 +960,7 @@ async def check_category_web_consistency(
     """
 
     try:
-        if not _use_nvidia_llama():
+        if not _use_openai_llm():
             category_terms = {
                 "retail": {"store", "shop", "goods", "market", "sales", "merchant"},
                 "food": {"food", "restaurant", "catering", "kitchen", "meal", "eatery"},
@@ -856,7 +979,7 @@ async def check_category_web_consistency(
             category_match = match and not competing_finance
             agent_log(
                 f"[CHECK] Category vs web presence: declared={declared_category} | "
-                f"LLaMA verdict: {category_match} (deterministic fallback)"
+                f"OpenAI verdict: {category_match} (deterministic fallback)"
             )
             if not category_match and (match or competing_finance):
                 return Flag(
@@ -869,21 +992,21 @@ async def check_category_web_consistency(
                 )
             return None
 
-        client = _llama_client()
-        if client is None:
-            raise RuntimeError("NVIDIA_API_KEY is not configured or openai package is unavailable")
-        response = client.chat.completions.create(
-            model=NVIDIA_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=100,
+        result = _safe_json_parse(
+            _call_openai_llm(
+                "You compare declared business categories with web search evidence.",
+                {"prompt": prompt},
+                max_tokens=100,
+                json_response=True,
+            )
+            or ""
         )
-        result = _safe_json_parse(response.choices[0].message.content or "") or {}
+        result = result or {}
         raw_match = result.get("match")
         category_match = raw_match if isinstance(raw_match, bool) else str(raw_match).lower() == "true"
         agent_log(
             f"[CHECK] Category vs web presence: declared={declared_category} | "
-            f"LLaMA verdict: {category_match}"
+            f"OpenAI verdict: {category_match}"
         )
         if not category_match:
             return Flag(
@@ -1136,6 +1259,8 @@ def _web_footprint_fallback(business_name: str, website: str, reason: str, exter
         True,
         "duckduckgo_local_fallback",
         "Web search unavailable; website fallback used.",
+        display_message="Validated locally — external web search unavailable",
+        technical_error=reason,
     )
 
 
@@ -1187,18 +1312,18 @@ async def generate_compliance_summary(tools: list[ToolResult], flags: list[Flag]
     agent_log("── GENERATING COMPLIANCE SUMMARY...")
     started = time.perf_counter()
     try:
-        if not _use_nvidia_llama():
-            raise RuntimeError(f"NVIDIA summary disabled ({_llm_provider()})")
-        text = _call_llama(SUMMARY_SYSTEM_PROMPT, payload, max_tokens=200).strip()
+        if not _use_openai_llm():
+            raise RuntimeError(f"OpenAI summary disabled ({_llm_provider()})")
+        text = _call_openai_llm(SUMMARY_SYSTEM_PROMPT, payload, max_tokens=512, json_response=False).strip()
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         agent_log(f"   Summary: {text}")
-        return text, ToolResult("llm_summary", "generated", 0.90, {"model": NVIDIA_MODEL, "latency_ms": elapsed_ms}, [], True, False, "nvidia_llama")
+        return text, ToolResult("llm_summary", "generated", 0.90, {"model": LLM_MODEL, "latency_ms": elapsed_ms}, [], True, False, "openai")
     except Exception as exc:
         legacy = await _legacy_anthropic_summary(payload)
         if legacy:
             agent_log(f"   Summary: {legacy[0]}")
             return legacy
-        agent_log(f"   LLaMA summary unavailable — using local template: {exc}", "warning")
+        agent_log(f"   OpenAI summary unavailable — using local template: {exc}", "warning")
         critical = sum(1 for flag in flags if flag.severity == FlagSeverity.CRITICAL)
         high = sum(1 for flag in flags if flag.severity == FlagSeverity.HIGH)
         if critical:
@@ -1225,7 +1350,7 @@ def _flag_counts(flags: list[Flag]) -> dict[FlagSeverity, int]:
 
 
 def _external_services_used(tools: list[ToolResult]) -> list[str]:
-    order = ["dojah_bvn", "dojah_nin", "cac_public_registry", "nominatim_maps", "duckduckgo", "google_search", "nvidia_llama", "claude_haiku"]
+    order = ["dojah_bvn", "dojah_nin", "cac_public_registry", "google_maps", "nominatim_maps", "duckduckgo", "google_search", "openai", "claude_haiku"]
     used = {tool.provider for tool in tools if tool.external_call_made and not tool.external_call_failed}
     return [provider for provider in order if provider in used]
 
@@ -1260,6 +1385,7 @@ async def _execute_tool(
                 True,
                 "google_maps_local_fallback",
                 "External verification disabled; address left for local review.",
+                display_message="Validated locally — external service unavailable",
             )
         if tool_name == "duckduckgo_search":
             return _web_footprint_fallback(
@@ -1342,7 +1468,7 @@ async def run_agentic_verification_async(vendor_submission: dict, extracted_fiel
         else:
             agent_log("   Flags raised: none")
 
-        agent_log(f"── LLaMA REASONING after {tool_name}:")
+        agent_log(f"── OpenAI REASONING after {tool_name}:")
         reasoning = reason_about_tool(result)
         agent_log(f"   Finding: {reasoning['finding']}")
         agent_log(f"   Risk delta: {reasoning['risk_delta']} — {reasoning['risk_delta_reason']}")
@@ -1352,12 +1478,12 @@ async def run_agentic_verification_async(vendor_submission: dict, extracted_fiel
             severity = FlagSeverity(raised.get("severity", "low"))
             advisory_flags.append(
                 _make_flag(
-                    raised.get("type", "llama_advisory_flag"),
+                    raised.get("type", "openai_advisory_flag"),
                     severity,
-                    raised.get("detail", "LLaMA advisory finding."),
-                    "llama_reasoning",
+                    raised.get("detail", "OpenAI advisory finding."),
+                    "openai_reasoning",
                     json.dumps(reasoning, default=str),
-                    "llama_reasoning_advisory",
+                    "openai_reasoning_advisory",
                 )
             )
         if not reasoning.get("continue_plan", True):
