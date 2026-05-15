@@ -35,6 +35,10 @@ function responseData(value: unknown): Record<string, unknown> | null {
     const data = (nested as Record<string, unknown>).data;
     return data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   }
+  const data = raw.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    return data as Record<string, unknown>;
+  }
   return null;
 }
 
@@ -126,6 +130,10 @@ export default function VendorPortalPage() {
   }
 
   async function lookupTransferAccount() {
+    if (!transferForm.bank_code) {
+      toast.error("Select a bank");
+      return;
+    }
     if (!/^\d{10}$/.test(transferForm.account_number)) {
       toast.error("Enter a 10 digit account number");
       return;
@@ -151,8 +159,16 @@ export default function VendorPortalPage() {
   }
 
   async function sendMoney() {
+    if (!transferForm.bank_code) {
+      toast.error("Select a bank");
+      return;
+    }
     if (!/^\d{10}$/.test(transferForm.account_number)) {
       toast.error("Enter a 10 digit account number");
+      return;
+    }
+    if (!transferForm.account_name.trim()) {
+      toast.error("Lookup the account before sending money");
       return;
     }
     setTransferBusy(true);
@@ -162,10 +178,11 @@ export default function VendorPortalPage() {
         bank_code: transferForm.bank_code,
         account_number: transferForm.account_number,
         account_name: transferForm.account_name,
-        remark: transferForm.remark,
+        remark: transferForm.remark.trim() || undefined,
         security_answer: transferForm.security_answer,
       });
       toast.success("Transfer submitted");
+      await mutate(`wallet-transactions-${activeVendorId}`);
       setTransferForm((current) => ({ ...current, amount: "", remark: "", security_answer: "" }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Transfer failed");
@@ -333,7 +350,10 @@ export default function VendorPortalPage() {
                 label="Bank"
                 options={squadTransferBankOptions}
                 value={transferForm.bank_code}
-                onChange={(event) => setTransferForm((current) => ({ ...current, bank_code: event.target.value }))}
+                onChange={(event) => {
+                  setTransferLookup(null);
+                  setTransferForm((current) => ({ ...current, bank_code: event.target.value, account_name: "" }));
+                }}
               />
               <Input
                 label="Account Number"
@@ -341,15 +361,18 @@ export default function VendorPortalPage() {
                 maxLength={10}
                 value={transferForm.account_number}
                 onChange={(event) =>
-                  setTransferForm((current) => ({
-                    ...current,
-                    account_number: event.target.value.replace(/\D/g, "").slice(0, 10),
-                  }))
+                  {
+                    setTransferLookup(null);
+                    setTransferForm((current) => ({
+                      ...current,
+                      account_number: event.target.value.replace(/\D/g, "").slice(0, 10),
+                      account_name: "",
+                    }));
+                  }
                 }
               />
-              <Input label="Account Name" value={transferForm.account_name} onChange={(event) => setTransferForm((current) => ({ ...current, account_name: event.target.value }))} />
               <Input label="Amount" inputMode="numeric" value={transferForm.amount} onChange={(event) => setTransferForm((current) => ({ ...current, amount: event.target.value }))} />
-              <Input className="sm:col-span-2" label="Remark" value={transferForm.remark} onChange={(event) => setTransferForm((current) => ({ ...current, remark: event.target.value }))} />
+              <Input className="sm:col-span-2" label="Remark (optional)" value={transferForm.remark} onChange={(event) => setTransferForm((current) => ({ ...current, remark: event.target.value }))} />
               <Input
                 className="sm:col-span-2"
                 label={securityAnswerLabel}
@@ -363,11 +386,22 @@ export default function VendorPortalPage() {
                 }
               />
             </div>
+            {transferForm.account_name ? (
+              <div className="mt-4 rounded-lg border border-[#D7F0E6] bg-[#E6F7F1] p-4 text-[12px]">
+                <p className="font-medium text-[#0B3142]">Verified account name</p>
+                <p className="mt-1 text-[15px] font-semibold text-[#0D9B68]">{transferForm.account_name}</p>
+              </div>
+            ) : null}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button variant="secondary" loading={transferLookupBusy} onClick={() => void lookupTransferAccount()}>
                 Lookup Account
               </Button>
-              <Button loading={transferBusy} leftIcon={<ArrowRight className="h-4 w-4" />} onClick={() => void sendMoney()}>
+              <Button
+                loading={transferBusy}
+                disabled={!transferForm.account_name || !transferLookup}
+                leftIcon={<ArrowRight className="h-4 w-4" />}
+                onClick={() => void sendMoney()}
+              >
                 Send Money
               </Button>
             </div>
@@ -389,10 +423,30 @@ export default function VendorPortalPage() {
               <ul className="divide-y divide-[#E5E9ED] text-[12px]">
                 {transactions.map((tx, index) => {
                   const item = tx as Record<string, unknown>;
+                  const rawAmount = item.amount || item.principal_amount;
+                  const amount =
+                    typeof rawAmount === "number"
+                      ? money(rawAmount)
+                      : rawAmount
+                        ? String(rawAmount)
+                        : "Amount unavailable";
+                  const direction = String(item.direction || "").toLowerCase();
+                  const isDebit = direction === "debit";
+                  const title = isDebit
+                    ? `Transfer to ${String(item.account_name || item.account_number || "recipient")}`
+                    : String(item.remarks || item.narration || item.transaction_reference || "Transaction");
                   return (
                     <li key={String(item.transaction_reference || item.reference || index)} className="px-4 py-3">
-                      <p className="font-medium text-[#0B3142]">{String(item.remarks || item.narration || item.transaction_reference || "Transaction")}</p>
-                      <p className="text-[#4A6B7C]">{String(item.principal_amount || item.amount || "Amount unavailable")}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-[#0B3142]">{title}</p>
+                          <p className="text-[#4A6B7C]">{String(item.status || item.narration || "Submitted")}</p>
+                        </div>
+                        <p className={isDebit ? "font-semibold text-[#DC2626]" : "font-semibold text-[#0D9B68]"}>
+                          {isDebit ? "-" : ""}
+                          {amount}
+                        </p>
+                      </div>
                     </li>
                   );
                 })}
