@@ -1,6 +1,6 @@
 "use client";
 
-import { MouseEvent } from "react";
+import { MouseEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertCircle, CheckCircle, ChevronRight } from "lucide-react";
@@ -38,10 +38,14 @@ function QueueSkeleton() {
 export function VendorQueue() {
   const router = useRouter();
   const { data, error, isLoading } = useQueue();
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const vendors = data || [];
 
   async function updateStatus(event: MouseEvent<HTMLButtonElement>, vendor: VendorListItem, status: Verdict) {
     event.stopPropagation();
+    const key = `${vendor.id}-${status}`;
+    setActionLoading(key);
     const previous = data;
     await mutate(
       "queue",
@@ -61,6 +65,8 @@ export function VendorQueue() {
     } catch (err) {
       await mutate("queue", previous, false);
       toast.error(err instanceof Error ? err.message : "Could not update vendor status");
+    } finally {
+      setActionLoading(null);
     }
   }
 
@@ -72,7 +78,15 @@ export function VendorQueue() {
         <AlertCircle className="h-8 w-8 text-[#DC2626]" />
         <h3 className="mt-3 text-[15px] font-semibold text-[#0B3142]">Something went wrong</h3>
         <p className="mt-1 text-[13px] text-[#4A6B7C]">Failed to load review queue.</p>
-        <Button className="mt-4" variant="secondary" onClick={() => void mutate("queue")}>
+        <Button
+          className="mt-4"
+          variant="secondary"
+          loading={retrying}
+          onClick={() => {
+            setRetrying(true);
+            void mutate("queue").finally(() => setRetrying(false));
+          }}
+        >
           Retry
         </Button>
       </Card>
@@ -136,6 +150,7 @@ export function VendorQueue() {
                     <Button
                       size="sm"
                       variant="successOutline"
+                      loading={actionLoading === `${vendor.id}-approved`}
                       onClick={(event) => void updateStatus(event, vendor, "approved")}
                     >
                       Approve
@@ -143,6 +158,7 @@ export function VendorQueue() {
                     <Button
                       size="sm"
                       variant="dangerOutline"
+                      loading={actionLoading === `${vendor.id}-blocked`}
                       onClick={(event) => void updateStatus(event, vendor, "blocked")}
                     >
                       Block
