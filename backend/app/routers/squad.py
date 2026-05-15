@@ -99,11 +99,7 @@ async def receive_squad_webhook(
         squad_log("   No TrustGate vendor matched this Squad transaction; stored monitor skipped", "warning")
         return {"received": True, "event": event["event"], "verified_status": verified_status, "matched_vendor": False}
 
-    transaction = (
-        db.query(Transaction)
-        .filter(Transaction.transaction_ref == transaction_ref)
-        .first()
-    )
+    transaction = db.query(Transaction).filter(Transaction.transaction_ref == transaction_ref).first()
     if not transaction:
         transaction = Transaction(
             merchant_id=vendor.id,

@@ -1,14 +1,27 @@
 import type {
   DashboardStats,
   Flag,
+  PaymentInitiateRequest,
+  PaymentInitiateResponse,
+  PaymentLookupResponse,
+  PaymentRecord,
+  PaymentSecurityQuestionResponse,
+  SquadPassthroughResponse,
+  TransferAccountLookupRequest,
+  TransferInitiateRequest,
   Transaction,
   TransactionStats,
+  VendorCreateResponse,
   Vendor,
   VendorCreate,
   VendorListItem,
   Verdict,
   Verification,
+  Wallet,
+  WalletCreateResponse,
+  WalletTransaction,
 } from "@/types";
+import { getActiveVendorId } from "./session";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -21,6 +34,15 @@ type ApiErrorBody = {
 
 function errorMessage(body: ApiErrorBody, fallback = "Request failed"): string {
   if (typeof body.detail === "string") return body.detail;
+  if (Array.isArray(body.detail)) {
+    const messages = body.detail
+      .map((item) => {
+        if (item && typeof item === "object" && "msg" in item) return String((item as { msg?: unknown }).msg);
+        return String(item);
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(", ");
+  }
   if (body.detail && typeof body.detail === "object") {
     const detail = body.detail as { message?: string; errors?: string[] };
     if (Array.isArray(detail.errors) && detail.errors.length) {
@@ -36,10 +58,12 @@ function errorMessage(body: ApiErrorBody, fallback = "Request failed"): string {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const isFormData = options?.body instanceof FormData;
+  const activeVendorId = getActiveVendorId();
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     headers: {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...(activeVendorId ? { "X-Vendor-Id": activeVendorId } : {}),
       ...options?.headers,
     },
   });
@@ -135,16 +159,20 @@ function normalizeVerification(raw: Record<string, unknown>, vendorId: string): 
 }
 
 export const api = {
-  createVendor: (data: VendorCreate) =>
-    request<Vendor>("/api/v1/vendors/", {
+  createVendor: async (data: VendorCreate) => {
+    const response = await request<VendorCreateResponse>("/api/vendors", {
       method: "POST",
       body: JSON.stringify(data),
-    }),
+    });
+    return response.vendor;
+  },
 
   getVendors: (params?: { status?: string; tier?: string }) =>
     request<VendorListItem[]>(withQuery("/api/v1/vendors/", params)),
 
   getVendor: (id: string) => request<VendorListItem>(`/api/v1/vendors/${id}`),
+
+  getCurrentVendor: () => request<Vendor>("/api/vendors/me"),
 
   updateVendorStatus: (id: string, status: Verdict) =>
     request<Vendor>(`/api/v1/vendors/${id}/status`, {
@@ -173,6 +201,63 @@ export const api = {
   },
 
   getFlags: (vendorId: string) => request<Flag[]>(`/api/v1/verify/${vendorId}/flags`),
+
+  getWallet: async (): Promise<Wallet | null> => {
+    try {
+      return await request<Wallet>("/api/wallets/me");
+    } catch (error) {
+      if (error instanceof Error && error.message.toLowerCase().includes("wallet not found")) {
+        return null;
+      }
+      throw error;
+    }
+  },
+
+  getWalletTransactions: () => request<WalletTransaction[]>("/api/wallets/me/transactions"),
+
+  createWallet: () => request<WalletCreateResponse>("/api/wallets", { method: "POST" }),
+
+  getPaymentSecurityQuestion: () =>
+    request<PaymentSecurityQuestionResponse>("/api/payments/security-question"),
+
+  getPayments: (params?: { status?: string }) =>
+    request<PaymentRecord[]>(withQuery("/api/payments", params)),
+
+  getPaymentStatus: (transactionRef: string) =>
+    request<PaymentLookupResponse>(`/api/payments/${encodeURIComponent(transactionRef)}`),
+
+  getPaymentById: (transactionRef: string) =>
+    request<PaymentLookupResponse>(`/api/payments/${encodeURIComponent(transactionRef)}`),
+
+  initiatePayment: (payload: PaymentInitiateRequest) =>
+    request<PaymentInitiateResponse>("/api/payments/initiate", {
+      method: "POST",
+      body: JSON.stringify({
+        ...payload,
+        currency: payload.currency || "NGN",
+        payment_channels: payload.payment_channels || ["card", "bank_transfer", "ussd", "squad"],
+        metadata: payload.metadata || {},
+        pass_charge: payload.pass_charge ?? false,
+      }),
+    }),
+
+  lookupTransferAccount: (payload: TransferAccountLookupRequest) =>
+    request<SquadPassthroughResponse>("/api/transfers/account-lookup", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  initiateTransfer: (payload: TransferInitiateRequest) =>
+    request<SquadPassthroughResponse>("/api/transfers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  sendSquadWebhook: (payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>("/api/webhooks/squad", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   uploadDocument: async (vendorId: string, docType: string, file: File) => {
     const form = new FormData();

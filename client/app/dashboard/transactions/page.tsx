@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, ArrowLeftRight, RefreshCw } from "lucide-react";
 import { mutate } from "swr";
@@ -113,6 +113,7 @@ function SummaryPanel({ stats }: { stats: TransactionStats }) {
 export default function TransactionsPage() {
   const { data: transactions, error, isLoading } = useTransactions();
   const { data: serverStats } = useTransactionStats();
+  const [refreshing, setRefreshing] = useState(false);
   const stats = useMemo(
     () => serverStats || computeStats(transactions || []),
     [serverStats, transactions],
@@ -131,8 +132,12 @@ export default function TransactionsPage() {
             </span>
             <Button
               variant="secondary"
+              loading={refreshing}
               leftIcon={<RefreshCw className="h-4 w-4" />}
-              onClick={() => void mutate("transactions")}
+              onClick={() => {
+                setRefreshing(true);
+                void Promise.all([mutate("transactions"), mutate("transaction-stats")]).finally(() => setRefreshing(false));
+              }}
             >
               Refresh
             </Button>
@@ -149,7 +154,15 @@ export default function TransactionsPage() {
               <AlertCircle className="h-9 w-9 text-[#DC2626]" />
               <h3 className="mt-3 text-[15px] font-semibold text-[#0B3142]">Something went wrong</h3>
               <p className="mt-1 text-[13px] text-[#4A6B7C]">Failed to load transaction feed.</p>
-              <Button className="mt-4" variant="secondary" onClick={() => void mutate("transactions")}>
+              <Button
+                className="mt-4"
+                variant="secondary"
+                loading={refreshing}
+                onClick={() => {
+                  setRefreshing(true);
+                  void Promise.all([mutate("transactions"), mutate("transaction-stats")]).finally(() => setRefreshing(false));
+                }}
+              >
                 Retry
               </Button>
             </Card>

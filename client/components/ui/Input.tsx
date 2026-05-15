@@ -4,12 +4,13 @@ import { cn } from "@/lib/utils";
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
   helperText?: string;
+  helperTone?: "default" | "danger";
   error?: string;
   rightElement?: ReactNode;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { className, error, helperText, id, label, rightElement, ...props },
+  { className, error, helperText, helperTone = "default", id, label, rightElement, ...props },
   ref,
 ) {
   const inputId = id || props.name;
@@ -41,7 +42,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       {error ? (
         <span className="mt-1 block text-[12px] leading-normal text-[#DC2626]">{error}</span>
       ) : helperText ? (
-        <span className="mt-1 block text-[12px] leading-normal text-[#4A6B7C]">{helperText}</span>
+        <span className={`mt-1 block text-[12px] leading-normal ${helperTone === "danger" ? "text-[#DC2626]" : "text-[#4A6B7C]"}`}>
+          {helperText}
+        </span>
       ) : null}
     </label>
   );

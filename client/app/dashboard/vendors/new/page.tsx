@@ -30,6 +30,7 @@ import { ScoreRing } from "@/components/ui/ScoreRing";
 import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
 import { getMerchantPreset, presetOptions } from "@/lib/merchantPresets";
+import { setActiveVendorId } from "@/lib/session";
 import { documentLabel, formatNaira, getTierLabel, tierRequiredDocuments } from "@/lib/utils";
 import type { FormState, Tier, VendorCreate, Verification } from "@/types";
 
@@ -76,6 +77,8 @@ const initialForm: FormState = {
   bank_code: "",
   account_number: "",
   account_name: "",
+  payment_security_question: "",
+  payment_security_answer: "",
 };
 
 const steps = [
@@ -117,6 +120,7 @@ const stepOneFields: FormField[] = [
 ];
 
 const bankFields: FormField[] = ["bank_code", "account_number", "account_name"];
+const securityFields: FormField[] = ["payment_security_question", "payment_security_answer"];
 
 function nairaToKobo(value: string): number | undefined {
   const amount = Number(value.replace(/[^\d.]/g, ""));
@@ -124,8 +128,17 @@ function nairaToKobo(value: string): number | undefined {
   return Math.round(amount * 100);
 }
 
+function normalizeProviderPhone(value: string): string {
+  return value.trim().replace(/[\s-]/g, "").replace(/^\+/, "");
+}
+
+function normalizeBusinessName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function validate(form: FormState): Partial<Record<FormField, string>> {
   const errors: Partial<Record<FormField, string>> = {};
+  const normalizedPhone = normalizeProviderPhone(form.phone);
   if (!form.business_name.trim()) errors.business_name = "Business name is required";
   if (form.tier === "tier3" && !form.rc_number.trim()) errors.rc_number = "RC number is required for companies";
   if (form.rc_number.trim() && !/^RC\s*\d{5,7}$/i.test(form.rc_number.trim())) {
@@ -136,13 +149,18 @@ function validate(form: FormState): Partial<Record<FormField, string>> {
   if (form.bvn.replace(/\D/g, "").length !== 11) errors.bvn = "Enter an 11 digit BVN";
   if (form.nin.replace(/\D/g, "").length !== 11) errors.nin = "Enter an 11 digit NIN";
   if (!/^\S+@\S+\.\S+$/.test(form.email)) errors.email = "Enter a valid email address";
-  if (!/^(\+?234|0)[789][01]\d{8}$/.test(form.phone.trim())) {
-    errors.phone = "Enter a valid Nigerian phone number";
+  if (!/^(234|0)[789][01]\d{8}$/.test(normalizedPhone) || ![11, 13].includes(normalizedPhone.length)) {
+    errors.phone = "Use 08012345678 or 2348012345678";
   }
   if (!form.address.trim()) errors.address = "Registered address is required";
   if (!form.bank_code) errors.bank_code = "Select a settlement bank";
+  if (form.bank_code && !["058", "000013"].includes(form.bank_code)) {
+    errors.bank_code = "Use GTBank for wallet-compatible settlement";
+  }
   if (!/^\d{10}$/.test(form.account_number.trim())) errors.account_number = "Enter a 10 digit account number";
   if (!form.account_name.trim()) errors.account_name = "Account name is required";
+  if (!form.payment_security_question.trim()) errors.payment_security_question = "Security question is required";
+  if (!form.payment_security_answer.trim()) errors.payment_security_answer = "Security answer is required";
   return errors;
 }
 
@@ -301,13 +319,21 @@ export default function NewVendorPage() {
   const [touched, setTouched] = useState<Partial<Record<FormField, boolean>>>({});
   const [showBvn, setShowBvn] = useState(false);
   const [showNin, setShowNin] = useState(false);
+  const [showSecurityAnswer, setShowSecurityAnswer] = useState(false);
   const [documents, setDocuments] = useState<Record<string, File>>({});
   const [uploadStatuses, setUploadStatuses] = useState<Record<string, UploadStatus>>({});
   const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [checkingBusinessName, setCheckingBusinessName] = useState(false);
+  const [duplicateBusinessName, setDuplicateBusinessName] = useState<string | null>(null);
   const [verificationStage, setVerificationStage] = useState<VerificationStageId>("idle");
   const [verificationResult, setVerificationResult] = useState<Verification | null>(null);
-  const errors = validate(form);
+  const errors = {
+    ...validate(form),
+    ...(duplicateBusinessName && normalizeBusinessName(duplicateBusinessName) === normalizeBusinessName(form.business_name)
+      ? { business_name: "Business name already exists" }
+      : {}),
+  };
   const requiredDocs = useMemo(() => tierRequiredDocuments(form.tier), [form.tier]);
 
   function loadPreset(presetName: string) {
@@ -340,6 +366,11 @@ export default function NewVendorPage() {
 
     setDocuments(simulatedDocs);
     setUploadStatuses(simulatedStatuses);
+    setTouched((current) => ({ ...current, business_name: true }));
+
+    if (typeof preset.data.business_name === "string") {
+      void checkBusinessNameAvailability(preset.data.business_name);
+    }
 
     // Show success toast
     toast.success("Demo merchant loaded successfully", {
@@ -348,6 +379,9 @@ export default function NewVendorPage() {
   }
 
   function updateField(field: FormField, value: string) {
+    if (field === "business_name") {
+      setDuplicateBusinessName(null);
+    }
     setForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -355,29 +389,58 @@ export default function NewVendorPage() {
     setTouched((current) => ({ ...current, [field]: true }));
   }
 
+  async function checkBusinessNameAvailability(name = form.business_name): Promise<boolean> {
+    const normalized = normalizeBusinessName(name);
+    if (!normalized) return false;
+
+    setCheckingBusinessName(true);
+    try {
+      const vendors = await api.getVendors();
+      const duplicate = vendors.find((vendor) => normalizeBusinessName(vendor.business_name) === normalized);
+      if (duplicate) {
+        setDuplicateBusinessName(duplicate.business_name);
+        markTouched("business_name");
+        toast.error("Business name already exists. Use a unique business name.");
+        return false;
+      }
+      setDuplicateBusinessName(null);
+      return true;
+    } catch {
+      return true;
+    } finally {
+      setCheckingBusinessName(false);
+    }
+  }
+
   function setDocStatus(docType: string, status: UploadStatus) {
     setUploadStatuses((current) => ({ ...current, [docType]: status }));
   }
 
-  function canContinueBusiness() {
+  async function canContinueBusiness() {
     setTouched((current) => ({
       ...current,
       ...Object.fromEntries(stepOneFields.map((field) => [field, true])),
     }));
-    return stepOneFields.every((field) => !errors[field]);
+    if (checkingBusinessName) {
+      toast.loading("Checking business name...", { id: "business-name-check" });
+      return false;
+    }
+    if (!stepOneFields.every((field) => !errors[field])) return false;
+    const businessNameAvailable = await checkBusinessNameAvailability();
+    return businessNameAvailable && !checkingBusinessName;
   }
 
   function canContinueDocuments() {
     setTouched((current) => ({
       ...current,
-      ...Object.fromEntries(bankFields.map((field) => [field, true])),
+      ...Object.fromEntries([...bankFields, ...securityFields].map((field) => [field, true])),
     }));
     const missing = requiredDocs.filter((doc) => !documents[doc]);
     if (missing.length > 0) {
       toast.error(`Upload ${documentLabel(missing[0])} before continuing`);
       return false;
     }
-    return bankFields.every((field) => !errors[field]);
+    return [...bankFields, ...securityFields].every((field) => !errors[field]);
   }
 
   async function pollVerification(vendorId: string) {
@@ -442,9 +505,14 @@ export default function NewVendorPage() {
       toast.error("Complete all required fields and documents");
       setTouched((current) => ({
         ...current,
-        ...Object.fromEntries([...stepOneFields, ...bankFields].map((field) => [field, true])),
+        ...Object.fromEntries([...stepOneFields, ...bankFields, ...securityFields].map((field) => [field, true])),
       }));
       return;
+    }
+
+    if (!createdVendorId) {
+      const businessNameAvailable = await checkBusinessNameAvailability();
+      if (!businessNameAvailable) return;
     }
 
     setSubmitting(true);
@@ -467,16 +535,23 @@ export default function NewVendorPage() {
           bank_code: form.bank_code,
           account_number: form.account_number.trim(),
           account_name: form.account_name.trim(),
+          settlement_account_name: form.account_name.trim(),
+          settlement_account_number: form.account_number.trim(),
+          settlement_bank_code: form.bank_code,
+          settlement_bank: form.bank_name,
+          payment_security_question: form.payment_security_question.trim(),
+          payment_security_answer: form.payment_security_answer.trim(),
           bvn: form.bvn.replace(/\D/g, ""),
           nin: form.nin.replace(/\D/g, ""),
           email: form.email.trim(),
-          phone: form.phone.trim(),
+          phone: normalizeProviderPhone(form.phone),
           address: form.address.trim(),
           tier: form.tier,
         };
         const vendor = await api.createVendor(payload);
         vendorId = vendor.id;
         setCreatedVendorId(vendor.id);
+        setActiveVendorId(vendor.id);
       }
 
       toast.loading("Uploading documents...", { id: toastId });
@@ -563,7 +638,11 @@ export default function NewVendorPage() {
                   label="Business Name"
                   value={form.business_name}
                   error={touched.business_name ? errors.business_name : undefined}
-                  onBlur={() => markTouched("business_name")}
+                  helperText={checkingBusinessName ? "Checking business name..." : undefined}
+                  onBlur={() => {
+                    markTouched("business_name");
+                    void checkBusinessNameAvailability();
+                  }}
                   onChange={(event) => updateField("business_name", event.target.value)}
                 />
                 <div>
@@ -695,12 +774,16 @@ export default function NewVendorPage() {
               </div>
               <div className="mt-8 flex justify-end">
                 <Button
+                  loading={checkingBusinessName}
+                  disabled={checkingBusinessName}
                   rightIcon={<ChevronRight className="h-4 w-4" />}
                   onClick={() => {
-                    if (canContinueBusiness()) setStep(2);
+                    void canContinueBusiness().then((canContinue) => {
+                      if (canContinue) setStep(2);
+                    });
                   }}
                 >
-                  Continue
+                  {checkingBusinessName ? "Checking..." : "Continue"}
                 </Button>
               </div>
             </div>
@@ -716,6 +799,7 @@ export default function NewVendorPage() {
                       key={docType}
                       docType={docType}
                       file={documents[docType]}
+                      vendorId={createdVendorId || undefined}
                       uploadState={status.state}
                       progress={status.progress}
                       error={status.error}
@@ -771,11 +855,45 @@ export default function NewVendorPage() {
                   />
                   <Input
                     label="Account Name"
+                    helperTone="danger"
                     helperText="Must match business name"
                     value={form.account_name}
                     error={touched.account_name ? errors.account_name : undefined}
                     onBlur={() => markTouched("account_name")}
                     onChange={(event) => updateField("account_name", event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-8 border-t border-[#E5E9ED] pt-6">
+                <h3 className="text-[18px] font-semibold text-[#0B3142]">Payment Security</h3>
+                <p className="mt-1 text-[12px] text-[#4A6B7C]">This will be used when the vendor initiates payments.</p>
+                <div className="mt-5 grid gap-5 md:grid-cols-2">
+                  <Input
+                    label="Security Question"
+                    value={form.payment_security_question}
+                    error={touched.payment_security_question ? errors.payment_security_question : undefined}
+                    onBlur={() => markTouched("payment_security_question")}
+                    onChange={(event) => updateField("payment_security_question", event.target.value)}
+                  />
+                  <Input
+                    label="Security Answer"
+                    type={showSecurityAnswer ? "text" : "password"}
+                    value={form.payment_security_answer}
+                    error={touched.payment_security_answer ? errors.payment_security_answer : undefined}
+                    onBlur={() => markTouched("payment_security_answer")}
+                    onChange={(event) => updateField("payment_security_answer", event.target.value)}
+                    rightElement={
+                      <button
+                        type="button"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-[#4A6B7C] transition-colors hover:bg-[#F2F4F6]"
+                        aria-label={showSecurityAnswer ? "Hide security answer" : "Show security answer"}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => setShowSecurityAnswer((current) => !current)}
+                      >
+                        {showSecurityAnswer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    }
                   />
                 </div>
               </div>
@@ -823,6 +941,7 @@ export default function NewVendorPage() {
                       ["Bank", form.bank_name],
                       ["Account Number", form.account_number],
                       ["Account Name", form.account_name],
+                      ["Security Question", form.payment_security_question],
                     ].map(([label, value]) => (
                       <div key={label}>
                         <dt className="text-[11px] font-semibold uppercase tracking-wide text-[#8FA3AF]">
