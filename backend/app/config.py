@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     SQUAD_SECRET_KEY: str = ""
     SQUAD_MOCK_MODE: bool = True
     NVIDIA_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    LLM_PROVIDER: str = "openai"
     EXTERNAL_VERIFICATION_ENABLED: bool = False
     IDENTITY_PROVIDER: str = "local"
     CAC_PROVIDER: str = "local"
@@ -25,7 +27,6 @@ class Settings(BaseSettings):
     GOOGLE_CX: str = ""
     ANTHROPIC_API_KEY: str = ""
     PREMBLY_API_KEY: str = ""
-    OPENAI_API_KEY: str = ""
     TESSERACT_PATH: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

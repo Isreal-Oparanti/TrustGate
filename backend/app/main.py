@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import Base, engine, verify_database_connection
 from app.models import Document, Flag, Transaction, Vendor, Verification
 from app.routers import admin, dashboard, documents, squad, vendors, verification
-from app.utils.logger import db_log, logger
+from app.utils.logger import agent_log, db_log, logger
 
 
 for _noisy in ("asyncio", "httpx", "httpcore", "watchfiles", "urllib3", "openai"):
@@ -53,7 +53,7 @@ try:
             "expected_monthly_volume": "INTEGER",
         },
     )
-    _ensure_columns("documents", {"doc_type": "VARCHAR"})
+    _ensure_columns("documents", {"doc_type": "VARCHAR", "file_size_kb": "INTEGER"})
     _ensure_columns(
         "verifications",
         {
@@ -73,6 +73,7 @@ except Exception as exc:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        agent_log("LLM provider: openai | model: gpt-4o-mini")
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as executor:
             db_ok = await loop.run_in_executor(executor, verify_database_connection)

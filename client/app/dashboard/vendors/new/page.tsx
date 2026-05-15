@@ -4,18 +4,19 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
+  BarChart3,
+  Brain,
   Check,
+  CheckCircle,
   ChevronLeft,
   ChevronRight,
   Eye,
   EyeOff,
-  FileSearch,
-  Globe2,
-  Landmark,
+  FileText,
+  Globe,
   Loader2,
-  ScanText,
+  MapPin,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -34,15 +35,9 @@ import type { FormState, Tier, VendorCreate, Verification } from "@/types";
 
 type FormField = keyof FormState;
 type UploadState = "idle" | "uploading" | "success" | "error";
-type VerificationStageId =
-  | "idle"
-  | "creating"
-  | "uploading"
-  | "ocr"
-  | "nlp"
-  | "identity"
-  | "external"
-  | "summary";
+type VerificationStageId = "idle" | "ocr" | "nlp" | "identity" | "address" | "web" | "scoring";
+type VerificationStepId = Exclude<VerificationStageId, "idle">;
+type StepStatus = "done" | "active" | "pending";
 
 interface UploadStatus {
   state: UploadState;
@@ -50,54 +45,17 @@ interface UploadStatus {
   error?: string;
 }
 
-const verificationStages: Array<{
-  id: Exclude<VerificationStageId, "idle">;
+const VERIFICATION_STEPS: Array<{
+  id: VerificationStepId;
   label: string;
-  detail: string;
-  icon: typeof FileSearch;
+  icon: typeof FileText;
 }> = [
-  {
-    id: "creating",
-    label: "Creating vendor profile",
-    detail: "Running deterministic field checks before saving.",
-    icon: ShieldCheck,
-  },
-  {
-    id: "uploading",
-    label: "Uploading documents",
-    detail: "Sending each required file with tracked upload status.",
-    icon: FileSearch,
-  },
-  {
-    id: "ocr",
-    label: "Analyzing and extracting documents",
-    detail: "Reading the CAC certificate, utility bill, and director ID.",
-    icon: ScanText,
-  },
-  {
-    id: "nlp",
-    label: "Preprocessing document text",
-    detail: "Matching business name, address, RC number, and category signals.",
-    icon: Sparkles,
-  },
-  {
-    id: "identity",
-    label: "Checking BVN and NIN",
-    detail: "Comparing identity signals against the director submission.",
-    icon: Landmark,
-  },
-  {
-    id: "external",
-    label: "Checking registry, address, and web presence",
-    detail: "Reviewing CAC, address precision, website, and reputation signals.",
-    icon: Globe2,
-  },
-  {
-    id: "summary",
-    label: "Preparing compliance report",
-    detail: "Scoring the verification layers and building the final review.",
-    icon: Check,
-  },
+  { id: "ocr", label: "Reading documents", icon: FileText },
+  { id: "nlp", label: "Analysing document content", icon: Brain },
+  { id: "identity", label: "Verifying identity", icon: ShieldCheck },
+  { id: "address", label: "Confirming business address", icon: MapPin },
+  { id: "web", label: "Checking web presence", icon: Globe },
+  { id: "scoring", label: "Calculating trust score", icon: BarChart3 },
 ];
 
 const initialForm: FormState = {
@@ -221,114 +179,117 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
   );
 }
 
-function UploadProgressRows({
+function formatFileSize(file?: File): string {
+  if (!file) return "";
+  const sizeMb = file.size / (1024 * 1024);
+  if (sizeMb >= 0.1) return `${sizeMb.toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(file.size / 1024))}KB`;
+}
+
+function UploadedDocumentList({
   docTypes,
+  documents,
   statuses,
 }: {
   docTypes: string[];
+  documents: Record<string, File>;
   statuses: Record<string, UploadStatus>;
 }) {
   return (
-    <div className="mt-5 space-y-3">
+    <div>
+      <p className="text-[12px] font-semibold uppercase tracking-wide text-[#4A6B7C]">Documents uploaded</p>
+      <div className="mt-3 space-y-2">
       {docTypes.map((docType) => {
         const status = statuses[docType] || { state: "idle", progress: 0 };
-        const color = status.state === "success" ? "#0D9B68" : status.state === "error" ? "#DC2626" : "#E51E56";
-        const label =
-          status.state === "success"
-            ? "Uploaded"
-            : status.state === "error"
-              ? "Error"
-              : status.state === "uploading"
-                ? `Uploading... ${status.progress}%`
-                : "Waiting...";
+        const file = documents[docType];
 
         return (
-          <div key={docType} className="grid gap-2 text-[12px] sm:grid-cols-[150px_1fr_110px] sm:items-center">
+          <div key={docType} className="grid grid-cols-[18px_minmax(120px,1fr)_minmax(0,1fr)_54px] items-center gap-2 text-[12px]">
+            {status.state === "success" ? (
+              <CheckCircle className="h-4 w-4 text-[#0D9B68]" />
+            ) : status.state === "uploading" ? (
+              <Loader2 className="h-4 w-4 animate-spin text-[#E51E56]" />
+            ) : status.state === "error" ? (
+              <AlertCircle className="h-4 w-4 text-[#DC2626]" />
+            ) : (
+              <span className="h-2 w-2 rounded-full bg-[#CDD3D9]" />
+            )}
             <span className="font-medium text-[#0B3142]">{documentLabel(docType)}</span>
-            <span className="h-2 overflow-hidden rounded-full bg-[#E8EEF2]">
-              <span
-                className="block h-full rounded-full transition-all duration-300"
-                style={{ width: `${status.state === "idle" ? 0 : status.progress}%`, backgroundColor: color }}
-              />
-            </span>
-            <span className="font-semibold text-[#4A6B7C]">{label}</span>
+            <span className="truncate text-[#4A6B7C]">{file?.name || "Waiting..."}</span>
+            <span className="text-right text-[#8FA3AF]">{formatFileSize(file)}</span>
             {status.state === "error" ? (
-              <p className="sm:col-span-3 text-[12px] text-[#DC2626]">{status.error}</p>
+              <p className="col-span-4 text-[12px] text-[#DC2626]">{status.error}</p>
             ) : null}
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
 
 function VerificationProgressPanel({
   docTypes,
+  documents,
   stage,
   statuses,
 }: {
   docTypes: string[];
+  documents: Record<string, File>;
   stage: VerificationStageId;
   statuses: Record<string, UploadStatus>;
 }) {
-  const activeIndex = Math.max(0, verificationStages.findIndex((item) => item.id === stage));
+  const activeIndex = Math.max(0, VERIFICATION_STEPS.findIndex((item) => item.id === stage));
+  const stepStatus = Object.fromEntries(
+    VERIFICATION_STEPS.map((step, index) => [
+      step.id,
+      index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
+    ]),
+  ) as Record<VerificationStepId, StepStatus>;
 
   return (
-    <div className="mt-8 rounded-xl border border-[#E5E9ED] bg-[#F8F9FA] p-6 text-[#0B3142]">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#E51E56] shadow-sm">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
-          <div>
-            <p className="text-[14px] font-semibold">Verification in progress</p>
-            <p className="text-[12px] text-[#4A6B7C]">
-              Keep this page open while TrustGate works through the checks.
-            </p>
-          </div>
-        </div>
-        <span className="rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-[#4A6B7C]">
-          {Math.min(activeIndex + 1, verificationStages.length)} / {verificationStages.length}
-        </span>
-      </div>
+    <div className="mt-8 rounded-xl border border-[#E5E9ED] bg-white p-6 text-[#0B3142]">
+      <UploadedDocumentList docTypes={docTypes} documents={documents} statuses={statuses} />
 
-      <div className="mt-6 grid gap-3 lg:grid-cols-7">
-        {verificationStages.map((item, index) => {
-          const Icon = item.icon;
-          const active = index === activeIndex;
-          const done = index < activeIndex;
-          return (
-            <motion.div
-              key={item.id}
-              animate={{
-                opacity: done || active ? 1 : 0.55,
-                y: active ? -2 : 0,
-              }}
-              className={`rounded-lg border p-3 ${
-                active
-                  ? "border-[#E51E56] bg-white shadow-sm"
-                  : done
-                    ? "border-[#D8EDE5] bg-[#F1FBF6]"
-                    : "border-[#E5E9ED] bg-white"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={`flex h-7 w-7 items-center justify-center rounded-full ${
-                    done ? "bg-[#0D9B68] text-white" : active ? "bg-[#FDE8EE] text-[#E51E56]" : "bg-[#E8EEF2] text-[#4A6B7C]"
+      <div className="my-5 h-px bg-[#E5E9ED]" />
+
+      <div>
+        <p className="text-[13px] font-semibold text-[#0B3142]">AI Verification in Progress</p>
+        <div className="mt-4 space-y-3">
+          {VERIFICATION_STEPS.map((step) => {
+            const Icon = step.icon;
+            const status = stepStatus[step.id];
+            return (
+              <div key={step.id} className="flex items-center gap-3">
+                <div
+                  className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full ${
+                    status === "done" ? "bg-[#E6F7F1]" : status === "active" ? "bg-[#FDE8EE]" : "bg-[#F2F4F6]"
                   }`}
                 >
-                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                  {status === "done" ? (
+                    <CheckCircle className="h-4 w-4 text-[#0D9B68]" />
+                  ) : status === "active" ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-[#E51E56]" />
+                  ) : (
+                    <Icon className="h-4 w-4 text-[#8FA3AF]" />
+                  )}
+                </div>
+                <span
+                  className={`text-[13px] ${
+                    status === "done"
+                      ? "font-medium text-[#0D9B68]"
+                      : status === "active"
+                        ? "font-medium text-[#0B3142]"
+                        : "text-[#8FA3AF]"
+                  }`}
+                >
+                  {step.label}
                 </span>
-                <span className="text-[12px] font-semibold leading-tight text-[#0B3142]">{item.label}</span>
               </div>
-              <p className="mt-2 text-[11px] leading-5 text-[#4A6B7C]">{item.detail}</p>
-            </motion.div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-
-      <UploadProgressRows docTypes={docTypes} statuses={statuses} />
     </div>
   );
 }
@@ -487,7 +448,7 @@ export default function NewVendorPage() {
     }
 
     setSubmitting(true);
-    setVerificationStage("creating");
+    setVerificationStage("ocr");
     const toastId = toast.loading("Creating vendor...");
     let stageTimer: number | undefined;
     try {
@@ -518,7 +479,6 @@ export default function NewVendorPage() {
         setCreatedVendorId(vendor.id);
       }
 
-      setVerificationStage("uploading");
       toast.loading("Uploading documents...", { id: toastId });
       for (const docType of requiredDocs) {
         if (uploadStatuses[docType]?.state === "success") continue;
@@ -527,17 +487,17 @@ export default function NewVendorPage() {
 
       setVerificationStage("ocr");
       toast.loading("Running AI verification...", { id: toastId });
-      const stageOrder: VerificationStageId[] = ["ocr", "nlp", "identity", "external", "summary"];
+      const stageOrder: VerificationStepId[] = ["ocr", "nlp", "identity", "address", "web", "scoring"];
       let stageIndex = 0;
       stageTimer = window.setInterval(() => {
         stageIndex = Math.min(stageIndex + 1, stageOrder.length - 1);
         setVerificationStage(stageOrder[stageIndex]);
-      }, 9000);
+      }, 8000);
       await api.runVerification(vendorId, { wait: false });
       const completed = await pollVerification(vendorId);
       window.clearInterval(stageTimer);
       stageTimer = undefined;
-      setVerificationStage("summary");
+      setVerificationStage("scoring");
       setVerificationResult(completed);
       toast.success("Verification complete", { id: toastId });
     } catch (error) {
@@ -892,7 +852,8 @@ export default function NewVendorPage() {
               {submitting ? (
                 <VerificationProgressPanel
                   docTypes={requiredDocs}
-                  stage={verificationStage === "idle" ? "creating" : verificationStage}
+                  documents={documents}
+                  stage={verificationStage === "idle" ? "ocr" : verificationStage}
                   statuses={uploadStatuses}
                 />
               ) : Object.values(uploadStatuses).some((status) => status.state === "error") ? (

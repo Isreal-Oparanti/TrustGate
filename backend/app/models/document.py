@@ -1,5 +1,5 @@
 import datetime as dt
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -13,6 +13,7 @@ class Document(Base):
     filename = Column(String, nullable=False)
     content_type = Column(String, nullable=False)
     path = Column(String, nullable=False)
+    file_size_kb = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), default=lambda: dt.datetime.now(dt.UTC), nullable=False)
 
     vendor = relationship("Vendor", back_populates="documents")
