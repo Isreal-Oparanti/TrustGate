@@ -19,7 +19,7 @@ class TransferInitiateRequest(BaseModel):
     bank_code: str
     account_number: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
     account_name: str = Field(min_length=1)
-    remark: str = Field(min_length=1)
+    remark: str | None = None
     security_answer: str = Field(min_length=1)
 
     @field_validator("bank_code")

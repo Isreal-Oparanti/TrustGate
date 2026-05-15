@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 
 from app.config import settings
 from app.database import Base, engine, verify_database_connection
-from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet
+from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet, WalletActivity
 from app.routers import admin, dashboard, documents, payments, squad, transactions, transfers, vendors, verification, wallets
 from app.utils.logger import db_log, logger
 
@@ -19,7 +19,7 @@ for _noisy in ("asyncio", "httpx", "httpcore", "watchfiles", "urllib3", "openai"
 
 
 # Keep model imports referenced so SQLAlchemy registers every table before create_all.
-_registered_models = (Document, Flag, Payment, Transaction, Vendor, Verification, Wallet)
+_registered_models = (Document, Flag, Payment, Transaction, Vendor, Verification, Wallet, WalletActivity)
 
 Base.metadata.create_all(bind=engine)
 db_log("✓ Tables verified - vendors, verifications, flags, payments, wallets, transactions")

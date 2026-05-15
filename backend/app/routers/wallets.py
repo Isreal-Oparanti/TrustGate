@@ -7,7 +7,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_vendor
 from app.models.vendor import Vendor
-from app.models.wallet import Wallet
+from app.models.wallet import Wallet, WalletActivity
 from app.schemas.wallet import WalletCreateResponse, WalletOut
 from app.services.squad_api import (
     create_business_virtual_account,
@@ -48,6 +48,37 @@ def _ensure_vendor_active(vendor: Vendor):
 def _extract_wallet_data(response: dict[str, Any]) -> dict[str, Any]:
     data = response.get("data")
     return data if isinstance(data, dict) else {}
+
+
+def _extract_wallet_transaction_rows(response: dict[str, Any]) -> list[dict[str, Any]]:
+    data = response.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        rows = data.get("rows")
+        if isinstance(rows, list):
+            return [item for item in rows if isinstance(item, dict)]
+    return []
+
+
+def _wallet_activity_to_row(activity: WalletActivity) -> dict[str, Any]:
+    return {
+        "id": activity.id,
+        "reference": activity.reference,
+        "transaction_reference": activity.reference,
+        "activity_type": activity.activity_type,
+        "direction": activity.direction,
+        "amount": activity.amount,
+        "currency": activity.currency,
+        "account_name": activity.account_name,
+        "account_number": activity.account_number,
+        "bank_code": activity.bank_code,
+        "narration": activity.narration,
+        "remarks": activity.narration,
+        "status": activity.status,
+        "created_at": activity.created_at.isoformat() if activity.created_at else None,
+        "source": "local_transfer",
+    }
 
 
 def _wallet_bank_code(data: dict[str, Any], vendor: Vendor) -> str | None:
@@ -166,4 +197,17 @@ def get_my_wallet_transactions(
     wallet = db.query(Wallet).filter(Wallet.vendor_id == current_vendor.id).first()
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found for current vendor")
-    return query_virtual_account_transactions(wallet.customer_identifier)
+    squad_response = query_virtual_account_transactions(wallet.customer_identifier)
+    rows = _extract_wallet_transaction_rows(squad_response)
+    rows.extend(
+        _wallet_activity_to_row(activity)
+        for activity in db.query(WalletActivity)
+        .filter(WalletActivity.vendor_id == current_vendor.id)
+        .order_by(WalletActivity.created_at.desc())
+        .all()
+    )
+    rows.sort(key=lambda item: str(item.get("created_at") or item.get("transaction_date") or ""), reverse=True)
+
+    merged_response = dict(squad_response)
+    merged_response["data"] = {"rows": rows, "count": len(rows)}
+    return merged_response
