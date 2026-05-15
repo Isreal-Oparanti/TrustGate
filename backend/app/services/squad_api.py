@@ -37,6 +37,13 @@ def _vendor_attr(vendor: Any, name: str, default: str = "") -> str:
     return str(getattr(vendor, name, default) or default)
 
 
+def _provider_mobile(value: str) -> str:
+    mobile = value.strip().replace(" ", "").replace("-", "")
+    if mobile.startswith("+"):
+        mobile = mobile[1:]
+    return mobile
+
+
 def _amount_naira(amount_kobo: int | float | None) -> float:
     return float(amount_kobo or 0) / 100
 
@@ -114,7 +121,7 @@ def create_business_virtual_account(vendor: Vendor, customer_identifier: str, be
     payload = {
         "customer_identifier": customer_identifier,
         "business_name": vendor.business_name,
-        "mobile_num": vendor.phone,
+        "mobile_num": _provider_mobile(vendor.phone),
         "bvn": vendor.bvn,
     }
     if beneficiary_account:

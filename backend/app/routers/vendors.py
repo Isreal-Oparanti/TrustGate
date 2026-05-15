@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -46,9 +47,17 @@ def validate_vendor_fields(payload: VendorCreate) -> list[str]:
         errors.append("NIN appears to be a placeholder value")
         nin_status = "⚠ placeholder"
 
-    if payload.phone and not re.match(r"^(\+?234|0)[789][01]\d{8}$", payload.phone):
-        errors.append("Invalid Nigerian phone number format")
+    if payload.phone and not re.match(r"^(234|0)[789][01]\d{8}$", payload.phone):
+        errors.append("Invalid Nigerian phone number format. Use 08012345678 or 2348012345678.")
         phone_status = "✗"
+
+    if payload.settlement_account_number and not re.match(r"^\d{10}$", payload.settlement_account_number):
+        errors.append("Settlement account number must be exactly 10 digits")
+
+    settlement_bank_code = (payload.settlement_bank_code or "").strip()
+    settlement_bank = (payload.settlement_bank or "").strip().lower()
+    if settlement_bank_code not in {"058", "000013"} and "gtbank" not in settlement_bank and "guaranty trust" not in settlement_bank:
+        errors.append("Wallet-compatible settlement bank must be GTBank")
 
     if tier in ["tier2", "tier3"] and payload.email:
         free_domains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"]
@@ -104,7 +113,8 @@ def create_vendor(
     payload: VendorCreate,
     db: Session = Depends(get_db),
 ):
-    existing_vendor = db.query(Vendor).filter(Vendor.business_name == payload.business_name).first()
+    business_name = " ".join(payload.business_name.split())
+    existing_vendor = db.query(Vendor).filter(func.lower(Vendor.business_name) == business_name.lower()).first()
     if existing_vendor:
         raise HTTPException(status_code=409, detail="Business name already exists")
 
@@ -120,7 +130,7 @@ def create_vendor(
 
     vendor = Vendor(
         id=str(uuid.uuid4()),
-        business_name=payload.business_name,
+        business_name=business_name,
         rc_number=payload.rc_number or None,
         website_url=payload.website_url or None,
         social_media_url=payload.social_media_url or None,
@@ -170,6 +180,11 @@ def list_vendors(
     return query.order_by(Vendor.created_at.desc()).all()
 
 
+@router.get("/me", response_model=VendorOut)
+def get_logged_in_vendor(current_vendor: Vendor = Depends(get_current_vendor)):
+    return current_vendor
+
+
 @router.get("/{vendor_id}", response_model=VendorOut)
 def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
@@ -196,8 +211,3 @@ def delete_vendor(vendor_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Vendor not found")
     db.delete(vendor)
     db.commit()
-
-
-@router.get("/me", response_model=VendorOut)
-def get_logged_in_vendor(current_vendor: Vendor = Depends(get_current_vendor)):
-    return current_vendor

@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 from enum import Enum
 from typing import Any, Optional
 
@@ -64,6 +65,18 @@ class VendorCreate(BaseModel):
         if not value.isdigit() or len(value) != 11:
             raise ValueError("NIN must be exactly 11 numeric characters.")
         return value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        normalized = value.strip().replace(" ", "").replace("-", "")
+        if normalized.startswith("+"):
+            normalized = normalized[1:]
+        if not normalized.isdigit() or len(normalized) not in {11, 13}:
+            raise ValueError("Mobile number length should be either 11 or 13 digits.")
+        if not re.match(r"^(234|0)[789][01]\d{8}$", normalized):
+            raise ValueError("Enter a valid Nigerian mobile number.")
+        return normalized
 
 
 class VendorStatusUpdate(BaseModel):

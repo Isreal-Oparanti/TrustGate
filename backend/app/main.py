@@ -10,7 +10,7 @@ from sqlalchemy import inspect, text
 from app.config import settings
 from app.database import Base, engine, verify_database_connection
 from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet
-from app.routers import admin, dashboard, documents, payments, squad, transfers, vendors, verification, wallets
+from app.routers import admin, dashboard, documents, payments, squad, transactions, transfers, vendors, verification, wallets
 from app.utils.logger import db_log, logger
 
 
@@ -122,6 +122,7 @@ app.include_router(vendors.router, prefix=f"{settings.API_V1_PREFIX}/vendors", t
 app.include_router(verification.router, prefix=f"{settings.API_V1_PREFIX}/verify", tags=["Verification"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Documents"])
 app.include_router(squad.router, prefix=f"{settings.API_V1_PREFIX}/squad", tags=["Squad"])
+app.include_router(transactions.router, prefix=f"{settings.API_V1_PREFIX}/transactions", tags=["Transactions"])
 app.include_router(dashboard.router, prefix=f"{settings.API_V1_PREFIX}/dashboard", tags=["Dashboard"])
 app.include_router(admin.router, prefix=f"{settings.API_V1_PREFIX}/admin", tags=["Admin"])
 

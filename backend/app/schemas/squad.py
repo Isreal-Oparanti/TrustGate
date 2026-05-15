@@ -16,6 +16,10 @@ class PaymentChannel(str, Enum):
     squad = "squad"
 
 
+class SquadCreateMerchantRequest(BaseModel):
+    vendor_id: str = Field(min_length=1)
+
+
 class PaymentInitiateRequest(BaseModel):
     amount: int = Field(gt=0, description="Amount in the lowest currency unit, for example kobo for NGN.")
     customer_email: EmailStr
