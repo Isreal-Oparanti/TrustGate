@@ -1,4 +1,4 @@
-import type { FlagSeverity, Tier, VendorListItem, Verdict } from "@/types";
+import type { FlagSeverity, Tier, Vendor, VendorListItem, Verdict, Wallet } from "@/types";
 
 export function formatNaira(kobo: number): string {
   return new Intl.NumberFormat("en-NG", {
@@ -72,6 +72,19 @@ export function getTierLabel(tier: string): string {
 
 export function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
+}
+
+export function walletBankName(wallet?: Wallet | null, vendor?: Vendor | null): string {
+  if (wallet?.bank) return wallet.bank;
+  if (wallet?.bank_code === "058" || wallet?.bank_code === "000013") return "GTBank";
+  if (vendor?.settlement_bank) return vendor.settlement_bank;
+  if (vendor?.bank_name) return vendor.bank_name;
+  if (wallet?.virtual_account_number) return "GTBank";
+  return "No bank";
+}
+
+export function walletAccountName(wallet?: Wallet | null, vendor?: Vendor | null): string {
+  return wallet?.account_name || vendor?.business_name || vendor?.settlement_account_name || vendor?.account_name || "No account name";
 }
 
 export function initials(name: string): string {

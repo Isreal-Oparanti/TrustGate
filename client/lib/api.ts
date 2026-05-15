@@ -167,6 +167,12 @@ export const api = {
     return response.vendor;
   },
 
+  loginVendor: (data: { business_name: string; rc_number: string }) =>
+    request<Vendor>("/api/vendors/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   getVendors: (params?: { status?: string; tier?: string }) =>
     request<VendorListItem[]>(withQuery("/api/v1/vendors/", params)),
 

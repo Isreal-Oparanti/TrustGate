@@ -13,7 +13,11 @@ import { formatDate, getTierLabel } from "@/lib/utils";
 export default function AdminPage() {
   const { data: vendors, error, isLoading, mutate } = useSWR("admin-vendors", api.getAdminVendors);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const sortedVendors = useMemo(() => vendors || [], [vendors]);
+  const selectedCount = selectedIds.length;
+  const allSelected = sortedVendors.length > 0 && selectedCount === sortedVendors.length;
 
   async function deleteVendor(id: string, name: string) {
     const confirmed = window.confirm(`Delete ${name} and all related verification data? This cannot be undone.`);
@@ -23,11 +27,43 @@ export default function AdminPage() {
     try {
       await api.deleteAdminVendor(id);
       await mutate((current) => current?.filter((vendor) => vendor.id !== id), { revalidate: false });
+      setSelectedIds((current) => current.filter((selectedId) => selectedId !== id));
       toast.success("Vendor deleted from the database");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not delete vendor");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  function toggleVendorSelection(id: string) {
+    setSelectedIds((current) =>
+      current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
+    );
+  }
+
+  function toggleAllVendors() {
+    setSelectedIds(allSelected ? [] : sortedVendors.map((vendor) => vendor.id));
+  }
+
+  async function deleteSelectedVendors() {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${selectedIds.length} selected vendor${selectedIds.length === 1 ? "" : "s"} and all related data? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setBulkDeleting(true);
+    try {
+      await Promise.all(selectedIds.map((id) => api.deleteAdminVendor(id)));
+      await mutate((current) => current?.filter((vendor) => !selectedIds.includes(vendor.id)), { revalidate: false });
+      toast.success(`Deleted ${selectedIds.length} vendor${selectedIds.length === 1 ? "" : "s"}`);
+      setSelectedIds([]);
+    } catch (err) {
+      await mutate();
+      toast.error(err instanceof Error ? err.message : "Could not delete selected vendors");
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -44,13 +80,24 @@ export default function AdminPage() {
               <p className="text-[13px] text-[#4A6B7C]">Delete test vendors and their related verification records.</p>
             </div>
           </div>
-          <Button
-            variant="secondary"
-            leftIcon={<RefreshCw className="h-4 w-4" />}
-            onClick={() => void mutate()}
-          >
-            Refresh
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="danger"
+              leftIcon={<Trash2 className="h-4 w-4" />}
+              loading={bulkDeleting}
+              disabled={selectedCount === 0}
+              onClick={() => void deleteSelectedVendors()}
+            >
+              Delete Selected{selectedCount ? ` (${selectedCount})` : ""}
+            </Button>
+            <Button
+              variant="secondary"
+              leftIcon={<RefreshCw className="h-4 w-4" />}
+              onClick={() => void mutate()}
+            >
+              Refresh
+            </Button>
+          </div>
         </div>
 
         <Card>
@@ -80,9 +127,19 @@ export default function AdminPage() {
               <table className="w-full min-w-[820px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-[#E5E9ED] text-[11px] uppercase tracking-wide text-[#8FA3AF]">
+                    <th className="w-11 px-3 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all vendors"
+                        checked={allSelected}
+                        onChange={toggleAllVendors}
+                        className="h-4 w-4 rounded border-[#CDD3D9] accent-[#E51E56]"
+                      />
+                    </th>
                     <th className="px-3 py-3">Vendor</th>
                     <th className="px-3 py-3">Tier</th>
                     <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3">Squad ID</th>
                     <th className="px-3 py-3">RC Number</th>
                     <th className="px-3 py-3">Created</th>
                     <th className="px-3 py-3 text-right">Action</th>
@@ -92,12 +149,24 @@ export default function AdminPage() {
                   {sortedVendors.map((vendor) => (
                     <tr key={vendor.id} className="text-[13px] text-[#0B3142]">
                       <td className="px-3 py-4">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${vendor.business_name}`}
+                          checked={selectedIds.includes(vendor.id)}
+                          onChange={() => toggleVendorSelection(vendor.id)}
+                          className="h-4 w-4 rounded border-[#CDD3D9] accent-[#E51E56]"
+                        />
+                      </td>
+                      <td className="px-3 py-4">
                         <p className="font-semibold">{vendor.business_name}</p>
                         <p className="text-[12px] text-[#4A6B7C]">{vendor.email}</p>
                       </td>
                       <td className="px-3 py-4">{getTierLabel(vendor.tier)}</td>
                       <td className="px-3 py-4">
                         <Badge variant={vendor.status}>{vendor.status}</Badge>
+                      </td>
+                      <td className="px-3 py-4">
+                        <p className="font-mono text-[12px]">{vendor.squad_account_id || "N/A"}</p>
                       </td>
                       <td className="px-3 py-4">{vendor.rc_number || "N/A"}</td>
                       <td className="px-3 py-4">{formatDate(vendor.created_at)}</td>

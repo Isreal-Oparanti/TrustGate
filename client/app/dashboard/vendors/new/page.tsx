@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/Input";
 import { ScoreRing } from "@/components/ui/ScoreRing";
 import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
+import { squadSupportedBankOptions } from "@/lib/banks";
 import { getMerchantPreset, presetOptions } from "@/lib/merchantPresets";
 import { setActiveVendorId } from "@/lib/session";
 import { documentLabel, formatNaira, getTierLabel, tierRequiredDocuments } from "@/lib/utils";
@@ -97,16 +98,6 @@ const businessCategoryOptions = [
   { label: "Other", value: "other" },
 ];
 
-const bankOptions = [
-  { label: "Select bank", value: "" },
-  { label: "GTBank", value: "058" },
-  { label: "Access Bank", value: "044" },
-  { label: "Zenith Bank", value: "057" },
-  { label: "UBA", value: "033" },
-  { label: "First Bank", value: "011" },
-  { label: "Other", value: "000" },
-];
-
 const stepOneFields: FormField[] = [
   "business_name",
   "rc_number",
@@ -154,9 +145,6 @@ function validate(form: FormState): Partial<Record<FormField, string>> {
   }
   if (!form.address.trim()) errors.address = "Registered address is required";
   if (!form.bank_code) errors.bank_code = "Select a settlement bank";
-  if (form.bank_code && !["058", "000013"].includes(form.bank_code)) {
-    errors.bank_code = "Use GTBank for wallet-compatible settlement";
-  }
   if (!/^\d{10}$/.test(form.account_number.trim())) errors.account_number = "Enter a 10 digit account number";
   if (!form.account_name.trim()) errors.account_name = "Account name is required";
   if (!form.payment_security_question.trim()) errors.payment_security_question = "Security question is required";
@@ -324,6 +312,10 @@ export default function NewVendorPage() {
   const [uploadStatuses, setUploadStatuses] = useState<Record<string, UploadStatus>>({});
   const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [viewingReport, setViewingReport] = useState(false);
+  const [approvingVendor, setApprovingVendor] = useState(false);
+  const [vendorApproved, setVendorApproved] = useState(false);
+  const [isReportPending, startReportTransition] = useTransition();
   const [checkingBusinessName, setCheckingBusinessName] = useState(false);
   const [duplicateBusinessName, setDuplicateBusinessName] = useState<string | null>(null);
   const [verificationStage, setVerificationStage] = useState<VerificationStageId>("idle");
@@ -589,6 +581,30 @@ export default function NewVendorPage() {
     }
   }
 
+  function viewFullReport() {
+    if (!verificationResult) return;
+    setViewingReport(true);
+    startReportTransition(() => {
+      router.push(`/dashboard/vendors/${verificationResult.vendor_id}`);
+    });
+  }
+
+  async function approveVendor() {
+    if (!verificationResult || approvingVendor || vendorApproved) return;
+
+    setApprovingVendor(true);
+    const toastId = toast.loading("Approving vendor...");
+    try {
+      await api.updateVendorStatus(verificationResult.vendor_id, "approved");
+      setVendorApproved(true);
+      toast.success("Vendor approved - Squad merchant account created", { id: toastId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not approve vendor", { id: toastId });
+    } finally {
+      setApprovingVendor(false);
+    }
+  }
+
   const monthlyVolume = nairaToKobo(form.expected_monthly_volume);
   const selectedCategory = businessCategoryOptions.find((option) => option.value === form.business_category)?.label;
 
@@ -625,9 +641,26 @@ export default function NewVendorPage() {
           </Badge>
           <h3 className="mt-5 text-[22px] font-bold text-[#0B3142]">Verification complete</h3>
           <p className="mt-1 text-[13px] text-[#4A6B7C]">The AI report is ready for compliance review.</p>
-          <Button className="mt-6" size="lg" onClick={() => router.push(`/dashboard/vendors/${verificationResult.vendor_id}`)}>
-            View Full Report
-          </Button>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <Button
+              size="lg"
+              loading={viewingReport || isReportPending}
+              onClick={viewFullReport}
+            >
+              View Full Report
+            </Button>
+            <Button
+              className={vendorApproved ? "blur-[0.5px]" : undefined}
+              size="lg"
+              variant="success"
+              loading={approvingVendor}
+              disabled={vendorApproved}
+              leftIcon={<CheckCircle className="h-4 w-4" />}
+              onClick={() => void approveVendor()}
+            >
+              {vendorApproved ? "Approved" : "Approve"}
+            </Button>
+          </div>
         </Card>
       ) : (
         <Card>
@@ -831,12 +864,12 @@ export default function NewVendorPage() {
                 <div className="mt-5 grid gap-5 md:grid-cols-3">
                   <Select
                     label="Bank Name"
-                    options={bankOptions}
+                    options={squadSupportedBankOptions}
                     value={form.bank_code}
                     error={touched.bank_code ? errors.bank_code : undefined}
                     onBlur={() => markTouched("bank_code")}
                     onChange={(event) => {
-                      const bank = bankOptions.find((option) => option.value === event.target.value);
+                      const bank = squadSupportedBankOptions.find((option) => option.value === event.target.value);
                       setForm((current) => ({
                         ...current,
                         bank_code: event.target.value,
