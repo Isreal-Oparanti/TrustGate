@@ -16,6 +16,7 @@ const primaryNav = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Vendors", href: "/dashboard/vendors", icon: Users },
   { label: "Transactions", href: "/dashboard/transactions", icon: ArrowLeftRight },
+  { label: "Operations", href: "/dashboard/operations", icon: ShieldCheck },
 ];
 
 const systemNav = [

@@ -20,6 +20,8 @@ export interface FormState {
   bank_code: string;
   account_number: string;
   account_name: string;
+  payment_security_question: string;
+  payment_security_answer: string;
 }
 
 export interface Vendor {
@@ -44,7 +46,15 @@ export interface Vendor {
   status: Verdict;
   squad_account_id: string | null;
   squad_merchant_id?: string | null;
+  settlement_account_name?: string | null;
+  settlement_account_number?: string | null;
+  settlement_bank_code?: string | null;
+  settlement_bank?: string | null;
+  settlement_status?: string;
+  payment_security_question?: string | null;
+  payment_security_answer_hash?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface VendorCreate {
@@ -65,6 +75,12 @@ export interface VendorCreate {
   phone: string;
   address: string;
   tier: Tier;
+  settlement_account_name: string;
+  settlement_account_number: string;
+  settlement_bank_code: string;
+  settlement_bank: string;
+  payment_security_question: string;
+  payment_security_answer: string;
 }
 
 export interface VendorListItem extends Vendor {
@@ -72,6 +88,11 @@ export interface VendorListItem extends Vendor {
   verification_score?: number;
   city?: string;
   updated_at?: string;
+}
+
+export interface VendorCreateResponse {
+  vendor: Vendor;
+  squad_response: Record<string, unknown>;
 }
 
 export interface Flag {
@@ -141,4 +162,99 @@ export interface TransactionStats {
     name: string;
     volume: number;
   }>;
+}
+
+export interface PaymentSecurityQuestionResponse {
+  question: string;
+  required: boolean;
+}
+
+export interface PaymentInitiateRequest {
+  amount: number;
+  customer_email: string;
+  customer_name: string;
+  security_answer: string;
+  currency?: "NGN" | "USD";
+  callback_url?: string | null;
+  payment_channels?: Array<"card" | "bank_transfer" | "ussd" | "squad">;
+  metadata?: Record<string, unknown>;
+  pass_charge?: boolean;
+}
+
+export interface PaymentInitiateResponse {
+  transaction_ref: string;
+  status: string;
+  checkout_url: string | null;
+  security_challenge_verified: boolean;
+  squad_response?: Record<string, unknown> | null;
+  squad_verification?: Record<string, unknown> | null;
+  squad_verification_error?: Record<string, unknown> | null;
+}
+
+export interface PaymentRecord {
+  id: string;
+  vendor_id: string;
+  transaction_ref: string;
+  amount: number;
+  customer_email: string;
+  customer_name?: string;
+  currency?: string;
+  status: string;
+  checkout_url?: string | null;
+  security_challenge_verified?: boolean;
+  fraud_status?: string;
+  fraud_notes?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface PaymentLookupResponse {
+  payment: PaymentRecord;
+  squad_verification?: Record<string, unknown> | null;
+}
+
+export interface Wallet {
+  id: string;
+  vendor_id: string;
+  customer_identifier: string;
+  virtual_account_number: string | null;
+  account_name: string | null;
+  bank: string | null;
+  bank_code: string | null;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WalletCreateResponse {
+  wallet: Wallet;
+  squad_response: Record<string, unknown>;
+}
+
+export interface WalletTransaction {
+  id?: string;
+  reference?: string;
+  amount?: number;
+  narration?: string;
+  status?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface TransferAccountLookupRequest {
+  bank_code: string;
+  account_number: string;
+}
+
+export interface TransferInitiateRequest {
+  amount: number;
+  bank_code: string;
+  account_number: string;
+  account_name: string;
+  remark: string;
+  security_answer: string;
+}
+
+export interface SquadPassthroughResponse {
+  squad_response: Record<string, unknown>;
 }

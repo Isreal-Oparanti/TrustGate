@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle, FileText, RotateCcw, Trash2, UploadCloud } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "@/lib/api";
@@ -35,35 +35,44 @@ export function DocumentUpload({
 }: DocumentUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [localStatus, setLocalStatus] = useState<"idle" | "selected" | "uploading" | "success" | "error">("idle");
+
+  useEffect(() => {
+    if (!file) {
+      setLocalStatus("idle");
+    }
+  }, [file]);
 
   async function handleFile(nextFile: File) {
     onFileSelected(docType, nextFile);
-    if (!vendorId) return;
-    setUploading(true);
+    if (!vendorId) {
+      setLocalStatus("selected");
+      return;
+    }
+    setLocalStatus("uploading");
     try {
       await api.uploadDocument(vendorId, docType, nextFile);
       toast.success(`${documentLabel(docType)} uploaded`);
+      setLocalStatus("success");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Document upload failed");
+      setLocalStatus("error");
     } finally {
-      setUploading(false);
+      if (inputRef.current) inputRef.current.value = "";
     }
   }
 
-  const statusLabel =
-    uploadState === "uploading"
-      ? `Uploading... ${progress}%`
-      : uploadState === "success"
-        ? "Uploaded"
-        : uploadState === "error"
-          ? "Upload failed"
-          : file
-            ? "Waiting..."
-            : "Waiting...";
+  const effectiveState = uploadState === "idle" ? localStatus : uploadState;
+  const statusLabel = (() => {
+    if (effectiveState === "selected") return "Selected";
+    if (effectiveState === "uploading") return `Uploading... ${progress}%`;
+    if (effectiveState === "success") return "Uploaded";
+    if (effectiveState === "error") return "Upload failed";
+    return file ? "Waiting..." : "Waiting...";
+  })();
 
   const barColor =
-    uploadState === "success" ? "#0D9B68" : uploadState === "error" ? "#DC2626" : "#E51E56";
+    effectiveState === "success" ? "#0D9B68" : effectiveState === "error" ? "#DC2626" : "#E51E56";
 
   return (
     <div className="rounded-xl border border-[#E5E9ED] bg-white p-5">
@@ -82,14 +91,21 @@ export function DocumentUpload({
         </span>
       </div>
 
-      <button
-        type="button"
+      <div
         className={cn(
-          "flex min-h-[132px] w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#E5E9ED] bg-white p-6 text-center transition-colors",
+          "flex min-h-[132px] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#E5E9ED] bg-white p-6 text-center transition-colors",
           "hover:border-[#E51E56] hover:bg-[#FDE8EE]",
           dragging && "border-[#E51E56] bg-[#FDE8EE]",
         )}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
+        role="button"
+        tabIndex={0}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -102,8 +118,8 @@ export function DocumentUpload({
           const dropped = event.dataTransfer.files[0];
           if (dropped) void handleFile(dropped);
         }}
-      >
-        {uploading ? (
+        >
+        {effectiveState === "uploading" ? (
           <Spinner size="md" className="text-[#E51E56]" />
         ) : (
           <UploadCloud className="h-6 w-6 text-[#4A6B7C]" />
@@ -112,7 +128,7 @@ export function DocumentUpload({
           Drag and drop or click to upload
         </span>
         <span className="text-[12px] text-[#8FA3AF]">PDF, JPG, PNG - max 10MB</span>
-      </button>
+      </div>
 
       <input
         ref={inputRef}
@@ -129,7 +145,7 @@ export function DocumentUpload({
         <div className="mt-4 rounded-lg bg-[#F8F9FA] px-3 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              {uploadState === "error" ? (
+              {effectiveState === "error" ? (
                 <AlertCircle className="h-4 w-4 shrink-0 text-[#DC2626]" />
               ) : (
                 <CheckCircle className="h-4 w-4 shrink-0 text-[#0D9B68]" />
@@ -141,7 +157,10 @@ export function DocumentUpload({
               aria-label={`Remove ${documentLabel(docType)}`}
               className="h-8 w-8 px-0"
               variant="ghost"
-              onClick={() => onRemove(docType)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove(docType);
+              }}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -151,14 +170,14 @@ export function DocumentUpload({
               <div
                 className="h-full rounded-full transition-all duration-300"
                 style={{
-                  width: `${uploadState === "idle" ? 0 : progress}%`,
+                  width: `${effectiveState === "idle" ? 0 : progress}%`,
                   backgroundColor: barColor,
                 }}
               />
             </div>
             <span className="text-[11px] font-semibold text-[#4A6B7C]">{statusLabel}</span>
           </div>
-          {uploadState === "error" ? (
+          {effectiveState === "error" ? (
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-[12px] text-[#DC2626]">{error || "Upload failed. Please try again."}</p>
               {onRetry ? (
@@ -166,7 +185,10 @@ export function DocumentUpload({
                   className="h-8 px-3"
                   variant="secondary"
                   leftIcon={<RotateCcw className="h-3.5 w-3.5" />}
-                  onClick={() => onRetry(docType)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRetry(docType);
+                  }}
                 >
                   Retry
                 </Button>

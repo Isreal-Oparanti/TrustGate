@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from app.main import app
 
 
@@ -16,16 +17,22 @@ def test_vendor_can_be_created_and_verified():
     vendor_payload = {
         "business_name": "Bright Future Ltd",
         "rc_number": "RC12345",
-        "bvn": "22345678901",
+        "bvn": "12345678901",
         "nin": "10987654321",
         "email": "ops@brightfuture.ng",
         "phone": "08012345678",
         "address": "12 Marina Road, Lagos",
         "tier": "tier3",
+        "settlement_account_name": "Bright Future Ltd",
+        "settlement_account_number": "0123456789",
+        "settlement_bank_code": "058",
+        "settlement_bank": "GTBank",
+        "payment_security_question": "What is your payment PIN?",
+        "payment_security_answer": "demo123",
     }
     create_response = client.post("/api/v1/vendors/", json=vendor_payload)
     assert create_response.status_code == 201
-    vendor_id = create_response.json()["id"]
+    vendor_id = create_response.json()["vendor"]["id"]
 
     verify_response = client.post(f"/api/v1/verify/{vendor_id}")
     assert verify_response.status_code == 200

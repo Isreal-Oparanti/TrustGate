@@ -16,13 +16,13 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
 
   return (
     <div
-      className={`grid grid-cols-1 gap-3 border-l-4 px-5 py-4 md:grid-cols-[130px_1fr_1fr_80px_auto] md:items-center ${
+      className={`grid grid-cols-1 gap-4 border-l-4 px-5 py-4 md:grid-cols-[180px_minmax(160px,1fr)_minmax(180px,1fr)_90px_auto] md:items-center ${
         transaction.flagged ? "border-[#DC2626] bg-[#FFF8F8]" : "border-[#0D9B68] bg-white"
       }`}
     >
       <div>
         <p className="text-[15px] font-bold text-[#0B3142]">{formatNaira(transaction.amount)}</p>
-        <p className="text-[12px] text-[#4A6B7C]">{transaction.transaction_ref}</p>
+        <p className="truncate text-[12px] text-[#4A6B7C]">{transaction.transaction_ref}</p>
       </div>
       <div>
         <p className="text-[13px] font-semibold text-[#0B3142]">

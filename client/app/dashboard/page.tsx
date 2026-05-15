@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Clock, Users, XCircle } from "lucide-react";
+import { useState } from "react";
 import { mutate } from "swr";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { MetricCard } from "@/components/dashboard/MetricCard";
@@ -12,12 +13,22 @@ import { Card } from "@/components/ui/Card";
 import { useStats } from "@/lib/hooks";
 
 function StatsError() {
+  const [retrying, setRetrying] = useState(false);
+
   return (
     <Card className="col-span-full flex min-h-[170px] flex-col items-center justify-center text-center">
       <AlertCircle className="h-8 w-8 text-[#DC2626]" />
       <h3 className="mt-3 text-[15px] font-semibold text-[#0B3142]">Something went wrong</h3>
       <p className="mt-1 text-[13px] text-[#4A6B7C]">Failed to load dashboard metrics.</p>
-      <Button className="mt-4" variant="secondary" onClick={() => void mutate("stats")}>
+      <Button
+        className="mt-4"
+        variant="secondary"
+        loading={retrying}
+        onClick={() => {
+          setRetrying(true);
+          void mutate("stats").finally(() => setRetrying(false));
+        }}
+      >
         Retry
       </Button>
     </Card>

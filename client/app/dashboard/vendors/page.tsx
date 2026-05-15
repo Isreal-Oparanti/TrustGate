@@ -61,6 +61,8 @@ export default function VendorsPage() {
   const [status, setStatus] = useState("");
   const [dateFilter, setDateFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [retrying, setRetrying] = useState(false);
+  const [openingNewVendor, setOpeningNewVendor] = useState(false);
   const { data, error, isLoading } = useVendors({
     tier: tier || undefined,
     status: status || undefined,
@@ -89,7 +91,14 @@ export default function VendorsPage() {
         title="Vendors"
         subtitle="Search, review, and manage vendors moving through Squad verification."
         action={
-          <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => router.push("/dashboard/vendors/new")}>
+          <Button
+            loading={openingNewVendor}
+            leftIcon={<Plus className="h-4 w-4" />}
+            onClick={() => {
+              setOpeningNewVendor(true);
+              router.push("/dashboard/vendors/new");
+            }}
+          >
             Register New Vendor
           </Button>
         }
@@ -159,7 +168,15 @@ export default function VendorsPage() {
           <AlertCircle className="h-9 w-9 text-[#DC2626]" />
           <h3 className="mt-3 text-[15px] font-semibold text-[#0B3142]">Something went wrong</h3>
           <p className="mt-1 text-[13px] text-[#4A6B7C]">Failed to load vendor data. Try again.</p>
-          <Button className="mt-4" variant="secondary" onClick={() => void mutate(["vendors", { tier: tier || undefined, status: status || undefined }])}>
+          <Button
+            className="mt-4"
+            variant="secondary"
+            loading={retrying}
+            onClick={() => {
+              setRetrying(true);
+              void mutate(["vendors", { tier: tier || undefined, status: status || undefined }]).finally(() => setRetrying(false));
+            }}
+          >
             Retry
           </Button>
         </Card>

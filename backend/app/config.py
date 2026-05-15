@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,11 @@ class Settings(BaseSettings):
     SQUAD_BASE_URL: str = "https://sandbox-api-d.squadco.com"
     SQUAD_SECRET_KEY: str = ""
     SQUAD_MOCK_MODE: bool = True
+    SQUAD_PARENT_BUSINESS_ID: str = "SBHDTWL6SR"
+    PAYMENT_CALLBACK_URL: str = "http://localhost:3000/"
+    PAYMENT_SECURITY_QUESTION: str = "What is your security answer?"
+    PAYMENT_SECURITY_ANSWER: str = ""
+    PAYMENT_SECURITY_ANSWER_HASH: str = ""
     NVIDIA_API_KEY: str = ""
     EXTERNAL_VERIFICATION_ENABLED: bool = False
     IDENTITY_PROVIDER: str = "local"
