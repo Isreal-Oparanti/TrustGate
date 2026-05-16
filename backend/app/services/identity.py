@@ -14,6 +14,16 @@ def verify_identity(vendor: Vendor) -> tuple[list[dict], str]:
                 "source": "identity",
             }
         )
+    elif vendor.tier in {"tier2", "tier3"} and not vendor.bvn.startswith("22"):
+        flags.append(
+            {
+                "code": "BUSINESS_BVN_PATTERN_MISMATCH",
+                "title": "Business BVN pattern mismatch",
+                "description": "Business BVN pattern does not match the expected verified merchant profile.",
+                "severity": 4,
+                "source": "identity",
+            }
+        )
 
     if not vendor.nin.isdigit() or len(vendor.nin) != 11:
         flags.append(

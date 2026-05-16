@@ -58,7 +58,7 @@ def _webhook_transaction_to_out(transaction: Transaction) -> TransactionOut:
         created_at=transaction.created_at,
         business_name=vendor.business_name if vendor else None,
         rc_number=vendor.rc_number if vendor else None,
-        flag_type="Webhook flag" if transaction.flagged else None,
+        flag_type="Behaviour anomaly" if transaction.flagged else None,
     )
 
 

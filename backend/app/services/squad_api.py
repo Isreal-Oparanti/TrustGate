@@ -383,6 +383,7 @@ async def update_merchant_status(squad_account_id: str, verdict: str) -> dict:
     status_map = {
         "approved": "active",
         "review": "pending",
+        "flagged": "restricted",
         "blocked": "restricted",
     }
     new_status = status_map.get(verdict, verdict)

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_vendor
 from app.models.vendor import Vendor
+from app.models.verification import Verification
 from app.schemas.vendor import (
     TierEnum,
     VendorCreate,
@@ -23,6 +24,21 @@ from app.utils.logger import db_log, logger
 
 
 router = APIRouter()
+
+
+def _attach_latest_verification_score(vendor: Vendor, db: Session) -> Vendor:
+    latest = (
+        db.query(Verification)
+        .filter(Verification.vendor_id == vendor.id)
+        .order_by(Verification.created_at.desc())
+        .first()
+    )
+    score = latest.trust_score if latest else None
+    setattr(vendor, "trust_score", score)
+    setattr(vendor, "verification_score", score)
+    if latest and vendor.status in {"pending", "review", "flagged", "blocked"}:
+        vendor.status = latest.verdict
+    return vendor
 
 
 def validate_vendor_fields(payload: VendorCreate) -> list[str]:
@@ -203,7 +219,8 @@ def list_vendors(
         query = query.filter(Vendor.status == status)
     if tier:
         query = query.filter(Vendor.tier == tier.value)
-    return query.order_by(Vendor.created_at.desc()).all()
+    vendors = query.order_by(Vendor.created_at.desc()).all()
+    return [_attach_latest_verification_score(vendor, db) for vendor in vendors]
 
 
 @router.get("/me", response_model=VendorOut)
@@ -216,7 +233,7 @@ def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    return vendor
+    return _attach_latest_verification_score(vendor, db)
 
 
 @router.patch("/{vendor_id}/status", response_model=VendorOut)

@@ -15,6 +15,7 @@ class TierEnum(str, Enum):
 class VerdictEnum(str, Enum):
     approved = "approved"
     review = "review"
+    flagged = "flagged"
     blocked = "blocked"
 
 
@@ -114,6 +115,8 @@ class VendorOut(BaseModel):
     squad_merchant_id: Optional[str] = None
     settlement_status: str = "not_started"
     payment_security_question: Optional[str] = None
+    trust_score: Optional[int] = None
+    verification_score: Optional[int] = None
     created_at: dt.datetime
     updated_at: dt.datetime
 

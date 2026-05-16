@@ -1,18 +1,22 @@
 import asyncio
 import logging
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from app.config import settings
 from app.database import Base, engine, verify_database_connection
 from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet, WalletActivity
 from app.routers import admin, dashboard, documents, payments, squad, transactions, transfers, vendors, verification, wallets
-from app.utils.logger import db_log, logger
+from app.utils.logger import agent_log, db_log, logger
 
+
+UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
 
 for _noisy in ("asyncio", "httpx", "httpcore", "watchfiles", "urllib3", "openai"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
@@ -113,6 +117,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 app.include_router(vendors.router, prefix="/api/vendors", tags=["Vendors"])
 app.include_router(wallets.router, prefix="/api/wallets", tags=["Wallets"])

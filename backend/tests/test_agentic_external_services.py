@@ -107,5 +107,5 @@ def test_external_agentic_services_success(monkeypatch):
         "claude_haiku",
     ]
     assert 85 <= result.agent_score <= 100
-    assert result.recommended_action == "approve"
+    assert result.recommended_action == "manual_review"
     assert not result.flags

@@ -24,7 +24,7 @@ def get_stats(db: Session = Depends(get_db)):
         .scalar()
         or 0
     )
-    blocked = db.query(func.count(Vendor.id)).filter(Vendor.status == "blocked").scalar() or 0
+    blocked = db.query(func.count(Vendor.id)).filter(Vendor.status.in_(["flagged", "blocked"])).scalar() or 0
     average_score = db.query(func.avg(Verification.trust_score)).scalar() or 0
     return {
         "total_today": total_today,
@@ -39,7 +39,7 @@ def get_stats(db: Session = Depends(get_db)):
 def get_queue(db: Session = Depends(get_db)):
     vendors = (
         db.query(Vendor)
-        .filter(Vendor.status.in_(["pending", "review"]))
+        .filter(Vendor.status.in_(["pending", "review", "flagged"]))
         .order_by(Vendor.created_at.desc())
         .limit(50)
         .all()
