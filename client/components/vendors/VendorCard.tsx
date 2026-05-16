@@ -37,7 +37,7 @@ export function VendorCard({ vendor }: VendorCardProps) {
       <div>
         <Badge variant={vendor.status}>{vendor.status === "review" ? "Review" : vendor.status}</Badge>
       </div>
-      <Button variant="ghost" onClick={() => router.push(`/dashboard/vendors/${vendor.id}`)}>
+      <Button variant="ghost" onClick={() => router.push(`/vendors/${vendor.id}`)}>
         View
       </Button>
     </div>

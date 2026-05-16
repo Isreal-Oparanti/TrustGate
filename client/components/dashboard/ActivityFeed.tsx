@@ -64,7 +64,7 @@ export function ActivityFeed() {
             return (
               <Link
                 key={vendor.id}
-                href={`/dashboard/vendors/${vendor.id}`}
+                href={`/vendors/${vendor.id}`}
                 className="grid grid-cols-[10px_1fr_auto] items-start gap-3 rounded-lg py-1"
               >
                 <span className="mt-2 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: status.color }} />

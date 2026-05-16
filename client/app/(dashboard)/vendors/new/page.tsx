@@ -739,7 +739,7 @@ export default function NewVendorPage() {
     if (!verificationResult) return;
     setViewingReport(true);
     startReportTransition(() => {
-      router.push(`/dashboard/vendors/${verificationResult.vendor_id}`);
+      router.push(`/vendors/${verificationResult.vendor_id}`);
     });
   }
 

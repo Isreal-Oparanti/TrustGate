@@ -96,7 +96,7 @@ export default function VendorsPage() {
             leftIcon={<Plus className="h-4 w-4" />}
             onClick={() => {
               setOpeningNewVendor(true);
-              router.push("/dashboard/vendors/new");
+              router.push("/vendors/new");
             }}
           >
             Register New Vendor
@@ -185,7 +185,7 @@ export default function VendorsPage() {
           <Users className="h-9 w-9 text-[#8FA3AF]" />
           <h3 className="mt-3 text-[15px] font-semibold text-[#0B3142]">No vendors yet</h3>
           <p className="mt-1 text-[13px] text-[#4A6B7C]">Register your first vendor to get started.</p>
-          <Link href="/dashboard/vendors/new" className="mt-4">
+          <Link href="/vendors/new" className="mt-4">
             <Button>Register New Vendor</Button>
           </Link>
         </Card>
