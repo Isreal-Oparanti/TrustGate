@@ -44,7 +44,8 @@ export function getVerdictLabel(verdict: string): string {
   const map: Record<string, string> = {
     approved: "Approved",
     review: "Under Review",
-    blocked: "Blocked",
+    flagged: "Flagged",
+    blocked: "Flagged",
     pending: "Pending",
   };
   return map[verdict] || verdict;
@@ -102,6 +103,7 @@ export function vendorScore(vendor: VendorListItem): number {
   const fallback: Record<Verdict, number> = {
     approved: 82,
     review: 52,
+    flagged: 35,
     blocked: 19,
     pending: 41,
   };

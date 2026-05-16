@@ -79,7 +79,7 @@ function TrustDistribution({
         </span>
         <span>
           <span className="mr-2 inline-block h-2 w-2 rounded-full bg-[#DC2626]" />
-          Blocked ({blockedPct}%)
+          Flagged ({blockedPct}%)
         </span>
       </div>
     </Card>
@@ -110,7 +110,7 @@ export default function DashboardPage() {
               value={stats?.total_today || 0}
             />
             <MetricCard
-              caption="auto-appr"
+              caption="manual only"
               color="#0D9B68"
               icon={CheckCircle}
               label="Approved"
@@ -127,10 +127,10 @@ export default function DashboardPage() {
               value={stats?.pending_review || 0}
             />
             <MetricCard
-              caption="auto-block"
+              caption="flagged"
               color="#DC2626"
               icon={XCircle}
-              label="Blocked"
+              label="Flagged"
               loading={isLoading}
               value={stats?.blocked || 0}
             />

@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
 const statusCopy = {
-  approved: { label: "auto-approved", color: "#0D9B68" },
-  blocked: { label: "blocked", color: "#DC2626" },
+  approved: { label: "approved", color: "#0D9B68" },
+  flagged: { label: "flagged", color: "#DC2626" },
+  blocked: { label: "flagged", color: "#DC2626" },
   review: { label: "sent to review", color: "#D97706" },
   pending: { label: "submitted", color: "#E51E56" },
 };

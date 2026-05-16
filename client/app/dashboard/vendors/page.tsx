@@ -137,7 +137,7 @@ export default function VendorsPage() {
               { label: "All Status", value: "" },
               { label: "Approved", value: "approved" },
               { label: "Under Review", value: "review" },
-              { label: "Blocked", value: "blocked" },
+              { label: "Flagged", value: "flagged" },
               { label: "Pending", value: "pending" },
             ]}
             onChange={(event) => {

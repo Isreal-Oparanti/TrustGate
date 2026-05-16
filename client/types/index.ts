@@ -1,5 +1,5 @@
 export type Tier = "tier1" | "tier2" | "tier3";
-export type Verdict = "approved" | "review" | "blocked" | "pending";
+export type Verdict = "approved" | "review" | "flagged" | "blocked" | "pending";
 export type FlagSeverity = "critical" | "high" | "medium" | "low" | "info";
 
 export interface FormState {

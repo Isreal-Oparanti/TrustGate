@@ -6,6 +6,7 @@ type BadgeVariant =
   | "success"
   | "review"
   | "warning"
+  | "flagged"
   | "blocked"
   | "danger"
   | "pending"
@@ -26,6 +27,7 @@ const variants: Record<BadgeVariant, string> = {
   success: "bg-[#E6F7F1] text-[#0D9B68]",
   review: "bg-[#FEF3C7] text-[#D97706]",
   warning: "bg-[#FEF3C7] text-[#D97706]",
+  flagged: "bg-[#FEE2E2] text-[#DC2626]",
   blocked: "bg-[#FEE2E2] text-[#DC2626]",
   danger: "bg-[#FEE2E2] text-[#DC2626]",
   pending: "bg-[#E8EEF2] text-[#0B3142]",

@@ -4,13 +4,12 @@ export interface MerchantPreset {
   name: string;
   description: string;
   data: Partial<FormState>;
-  documents: Record<string, { filename: string; state: "success" }>;
+  documents: Record<string, { filename: string; state: "success"; sourcePath?: string }>;
 }
 
-// Legit Merchant Preset (Tier 2: cac_certificate, utility_bill, directors_id)
 const legitimateMerchant: MerchantPreset = {
   name: "Load Legit Merchant",
-  description: "Realistic SME with medium volume",
+  description: "Legitimate SME with original uploaded documents",
   data: {
     business_name: "Sunshine Electronics Ltd",
     tier: "tier2",
@@ -33,34 +32,45 @@ const legitimateMerchant: MerchantPreset = {
     payment_security_answer: "24",
   },
   documents: {
-    cac_certificate: { filename: "cac_certificate_sunshine.pdf", state: "success" },
-    utility_bill: { filename: "utility_bill_lekki_2024.jpg", state: "success" },
-    directors_id: { filename: "director_id_chioma_okonkwo.png", state: "success" },
+    cac_certificate: {
+      filename: "sunshine_cac_certificate.png",
+      state: "success",
+      sourcePath: "/uploads/83207002-d5a3-48f5-a01c-79a627ea9904/cd9f5dd0-8d95-4c7c-aaef-3ce8c54613cc_CAC.png",
+    },
+    utility_bill: {
+      filename: "sunshine_utility_bill.png",
+      state: "success",
+      sourcePath: "/uploads/83207002-d5a3-48f5-a01c-79a627ea9904/c465376f-9ebd-43c3-ac8a-f657fc3510a8_UTILITY.png",
+    },
+    directors_id: {
+      filename: "sunshine_director_id.png",
+      state: "success",
+      sourcePath: "/uploads/83207002-d5a3-48f5-a01c-79a627ea9904/3ce1a105-b5c5-4981-acf5-79a523a51491_iD.png",
+    },
   },
 };
 
-// Suspicious Merchant Preset (Tier 2: cac_certificate, utility_bill, directors_id)
-const suspiciousMerchant: MerchantPreset = {
-  name: "Load Suspicious Merchant",
-  description: "Mismatched category with weak online presence",
+const fraudMerchant: MerchantPreset = {
+  name: "Load Fraud Merchant",
+  description: "High-risk merchant with weak identity and behaviour signals",
   data: {
-    business_name: "Global Import Services",
+    business_name: "FastCash Digital Network",
     tier: "tier2",
-    rc_number: "RC 9876543",
-    director_name: "Tunde Adeyemi",
-    business_category: "logistics",
-    website_url: "https://blogspot.com/globalimport",
-    social_media_url: "https://facebook.com/profile.php?id=1234567",
-    expected_monthly_volume: "₦8,500,000",
-    bvn: "31265438917",
+    rc_number: "RC 5555555",
+    director_name: "Chukwudi Nwosu",
+    business_category: "other",
+    website_url: "https://fastcashdigital.xyz",
+    social_media_url: "https://telegram.me/fastcash_updates",
+    expected_monthly_volume: "₦45,000,000",
+    bvn: "31289563214",
     nin: "19832756241",
-    email: "tunde.biz99@gmail.com",
-    phone: "+2347034567891",
+    email: "admin@fastcashdigital.xyz",
+    phone: "2349067890123",
     address: "Apartment 12B, Ikeja GRA, Lagos, Nigeria",
-    bank_name: "Access Bank",
-    bank_code: "044",
-    account_number: "1098765432",
-    account_name: "Tunde Adeyemi",
+    bank_name: "GTBank",
+    bank_code: "058",
+    account_number: "0123456789",
+    account_name: "FastCash Digital Network",
     payment_security_question: "What is the first two digits of the payment code?",
     payment_security_answer: "24",
   },
@@ -71,45 +81,9 @@ const suspiciousMerchant: MerchantPreset = {
   },
 };
 
-// High-Risk Merchant Preset (Tier 3: cac_certificate, utility_bill, directors_id, cac_form_cac2, cac_form_cac7, memart)
-const highRiskMerchant: MerchantPreset = {
-  name: "Load High-Risk Merchant",
-  description: "Crypto/gambling styled with extreme volume expectations",
-  data: {
-    business_name: "FastCash Digital Network",
-    tier: "tier3",
-    rc_number: "RC 5555555",
-    director_name: "Chukwudi Nwosu",
-    business_category: "other",
-    website_url: "https://fastcashdigital.xyz",
-    social_media_url: "https://telegram.me/fastcash_updates",
-    expected_monthly_volume: "₦45,000,000",
-    bvn: "24789563214",
-    nin: "18765432189",
-    email: "admin@fastcashdigital.xyz",
-    phone: "+2349067890123",
-    address: "Plot 99, Victoria Island, Lagos, Nigeria",
-    bank_name: "Other",
-    bank_code: "000",
-    account_number: "9999999999",
-    account_name: "FastCash Digital Network",
-    payment_security_question: "What is the first two digits of the payment code?",
-    payment_security_answer: "24",
-  },
-  documents: {
-    cac_certificate: { filename: "cac_fastcash_2024.pdf", state: "success" },
-    utility_bill: { filename: "vi_electricity_invoice.jpg", state: "success" },
-    directors_id: { filename: "directors_passport_chukwudi.png", state: "success" },
-    cac_form_cac2: { filename: "cac_form_cac2_fastcash.pdf", state: "success" },
-    cac_form_cac7: { filename: "cac_form_cac7_fastcash.pdf", state: "success" },
-    memart: { filename: "memart_registration_fastcash.pdf", state: "success" },
-  },
-};
-
 export const merchantPresets: MerchantPreset[] = [
   legitimateMerchant,
-  suspiciousMerchant,
-  highRiskMerchant,
+  fraudMerchant,
 ];
 
 export const presetOptions = [

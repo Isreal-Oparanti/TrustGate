@@ -31,6 +31,7 @@ import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
 import { squadSupportedBankOptions } from "@/lib/banks";
 import { getMerchantPreset, presetOptions } from "@/lib/merchantPresets";
+import type { MerchantPreset } from "@/lib/merchantPresets";
 import { setActiveVendorId } from "@/lib/session";
 import { documentLabel, formatNaira, getTierLabel, tierRequiredDocuments } from "@/lib/utils";
 import type { FormState, Tier, VendorCreate, Verification } from "@/types";
@@ -192,6 +193,160 @@ function formatFileSize(file?: File): string {
   return `${Math.max(1, Math.round(file.size / 1024))}KB`;
 }
 
+function pngFilename(filename: string): string {
+  return `${filename.replace(/\.[^/.]+$/, "")}.png`;
+}
+
+function apiBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+}
+
+function presetDocumentLines(preset: MerchantPreset, docType: string): string[] {
+  const data = preset.data;
+  const businessName = String(data.business_name ?? "Preset Merchant");
+  const directorName = String(data.director_name ?? "Director Name");
+  const rcNumber = String(data.rc_number ?? "RC 0000000");
+  const address = String(data.address ?? "Registered address unavailable");
+  const accountName = String(data.account_name ?? businessName);
+  const fraudPreset = preset.name.toLowerCase().includes("fraud");
+
+  if (fraudPreset && docType === "cac_certificate") {
+    return [
+      "Corporate Affairs Commission",
+      "Certificate of Incorporation",
+      "Business Name: Global Import Services Ltd",
+      "Registration Number: RC 9876543",
+      "Director: Tunde Adeyemi",
+      "Registered Address: Plot 9, Aba Industrial Market, Abia State",
+    ];
+  }
+  if (fraudPreset && docType === "utility_bill") {
+    return [
+      "Electricity Distribution Company",
+      "Utility Bill",
+      "Customer: Tunde Adeyemi",
+      "Service Address: 18 Airport Road, Kano, Nigeria",
+      "Billing Month: March 2026",
+      "Payment Status: Overdue",
+    ];
+  }
+  if (fraudPreset && docType === "directors_id") {
+    return [
+      "Federal Republic of Nigeria",
+      "National Identity Card",
+      "Name: Tunde Adeyemi",
+      "NIN: 10987654321",
+      "Address: 18 Airport Road, Kano, Nigeria",
+    ];
+  }
+
+  if (docType === "cac_certificate") {
+    return [
+      "Corporate Affairs Commission",
+      "Certificate of Incorporation",
+      `Business Name: ${businessName}`,
+      `Registration Number: ${rcNumber}`,
+      `Director: ${directorName}`,
+      `Registered Address: ${address}`,
+    ];
+  }
+  if (docType === "utility_bill") {
+    return [
+      "Electricity Distribution Company",
+      "Utility Bill",
+      `Customer: ${businessName}`,
+      `Service Address: ${address}`,
+      "Billing Month: March 2026",
+      "Payment Status: Paid",
+    ];
+  }
+  if (docType === "directors_id") {
+    return [
+      "Federal Republic of Nigeria",
+      "National Identity Card",
+      `Name: ${directorName}`,
+      `NIN: ${String(data.nin ?? "00000000000")}`,
+      `Address: ${address}`,
+    ];
+  }
+  if (docType === "bank_statement") {
+    return [
+      "Bank Account Statement",
+      `Account Name: ${accountName}`,
+      `Account Number: ${String(data.account_number ?? "0000000000")}`,
+      `Business: ${businessName}`,
+      "Statement Period: January 2026 - March 2026",
+    ];
+  }
+  return [
+    documentLabel(docType),
+    `Business Name: ${businessName}`,
+    `Registration Number: ${rcNumber}`,
+    `Director: ${directorName}`,
+    `Registered Address: ${address}`,
+  ];
+}
+
+async function createPresetDocumentFile(preset: MerchantPreset, docType: string, filename: string): Promise<File> {
+  const canvas = window.document.createElement("canvas");
+  canvas.width = 1200;
+  canvas.height = 1600;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not prepare preset document");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "#0B3142";
+  ctx.lineWidth = 6;
+  ctx.strokeRect(56, 56, canvas.width - 112, canvas.height - 112);
+  ctx.fillStyle = "#0B3142";
+  ctx.font = "700 54px Arial";
+  ctx.fillText("TrustGate Demo Document", 110, 150);
+  ctx.font = "400 30px Arial";
+  ctx.fillStyle = "#4A6B7C";
+  ctx.fillText("Generated from merchant preset for automated backend upload", 110, 205);
+  ctx.fillStyle = "#E51E56";
+  ctx.fillRect(110, 255, 150, 10);
+
+  ctx.fillStyle = "#0B3142";
+  ctx.font = "700 42px Arial";
+  ctx.fillText(documentLabel(docType), 110, 350);
+  ctx.font = "400 36px Arial";
+
+  presetDocumentLines(preset, docType).forEach((line, index) => {
+    ctx.fillText(line, 110, 445 + index * 78);
+  });
+
+  ctx.font = "400 28px Arial";
+  ctx.fillStyle = "#4A6B7C";
+  ctx.fillText("This file is generated locally and uploaded through the normal document API.", 110, 1425);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) resolve(nextBlob);
+      else reject(new Error("Could not create preset document"));
+    }, "image/png");
+  });
+
+  return new File([blob], pngFilename(filename), { type: "image/png", lastModified: Date.now() });
+}
+
+async function loadPresetDocumentFile(preset: MerchantPreset, docType: string, docInfo: MerchantPreset["documents"][string]): Promise<File> {
+  if (!docInfo.sourcePath) {
+    return createPresetDocumentFile(preset, docType, docInfo.filename);
+  }
+
+  const response = await fetch(`${apiBaseUrl()}${docInfo.sourcePath}`);
+  if (!response.ok) {
+    throw new Error(`Could not load ${documentLabel(docType)} from preset source`);
+  }
+  const blob = await response.blob();
+  return new File([blob], docInfo.filename, {
+    type: blob.type || "image/png",
+    lastModified: Date.now(),
+  });
+}
+
 function UploadedDocumentList({
   docTypes,
   documents,
@@ -328,7 +483,7 @@ export default function NewVendorPage() {
   };
   const requiredDocs = useMemo(() => tierRequiredDocuments(form.tier), [form.tier]);
 
-  function loadPreset(presetName: string) {
+  async function loadPreset(presetName: string) {
     const preset = getMerchantPreset(presetName);
     if (!preset) return;
 
@@ -338,23 +493,22 @@ export default function NewVendorPage() {
       ...preset.data,
     }));
 
-    // Simulate document uploads
     const simulatedDocs: Record<string, File> = {};
     const simulatedStatuses: Record<string, UploadStatus> = {};
 
-    Object.entries(preset.documents).forEach(([docType, docInfo]) => {
-      // Create a mock file
-      const mockFile = new File(
-        [new ArrayBuffer(1024)], // 1KB mock content
-        docInfo.filename,
-        { type: "application/pdf" }
-      );
-      simulatedDocs[docType] = mockFile;
-      simulatedStatuses[docType] = {
-        state: "success",
-        progress: 100,
-      };
-    });
+    try {
+      await Promise.all(Object.entries(preset.documents).map(async ([docType, docInfo]) => {
+        simulatedDocs[docType] = await loadPresetDocumentFile(preset, docType, docInfo);
+        simulatedStatuses[docType] = {
+          state: "idle",
+          progress: 0,
+        };
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not load preset documents";
+      toast.error(message);
+      return;
+    }
 
     setDocuments(simulatedDocs);
     setUploadStatuses(simulatedStatuses);
@@ -365,7 +519,7 @@ export default function NewVendorPage() {
     }
 
     // Show success toast
-    toast.success("Demo merchant loaded successfully", {
+    toast.success("Demo merchant loaded. Documents will upload on submit.", {
       duration: 3000,
     });
   }
@@ -620,7 +774,7 @@ export default function NewVendorPage() {
               value=""
               onChange={(event) => {
                 if (event.target.value) {
-                  loadPreset(event.target.value);
+                  void loadPreset(event.target.value);
                   // Reset select after loading
                   event.target.value = "";
                 }
