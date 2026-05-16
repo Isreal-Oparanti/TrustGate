@@ -193,8 +193,8 @@ function formatFileSize(file?: File): string {
   return `${Math.max(1, Math.round(file.size / 1024))}KB`;
 }
 
-function pngFilename(filename: string): string {
-  return `${filename.replace(/\.[^/.]+$/, "")}.png`;
+function pdfFilename(filename: string): string {
+  return `${filename.replace(/\.[^/.]+$/, "")}.pdf`;
 }
 
 function apiBaseUrl(): string {
@@ -287,48 +287,57 @@ function presetDocumentLines(preset: MerchantPreset, docType: string): string[] 
   ];
 }
 
+function pdfText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function createTextPdf(lines: string[]): Blob {
+  const textCommands = lines
+    .map((line, index) => {
+      const fontSize = index === 0 ? 24 : index === 2 ? 18 : 12;
+      const leading = index === 0 ? 34 : 22;
+      return `/${index <= 2 ? "F2" : "F1"} ${fontSize} Tf 0 -${leading} Td (${pdfText(line)}) Tj`;
+    })
+    .join("\n");
+  const stream = `BT\n72 780 Td\n${textCommands}\nET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets[index + 1] = pdf.length;
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return new Blob([pdf], { type: "application/pdf" });
+}
+
 async function createPresetDocumentFile(preset: MerchantPreset, docType: string, filename: string): Promise<File> {
-  const canvas = window.document.createElement("canvas");
-  canvas.width = 1200;
-  canvas.height = 1600;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Could not prepare preset document");
-
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = "#0B3142";
-  ctx.lineWidth = 6;
-  ctx.strokeRect(56, 56, canvas.width - 112, canvas.height - 112);
-  ctx.fillStyle = "#0B3142";
-  ctx.font = "700 54px Arial";
-  ctx.fillText("TrustGate Demo Document", 110, 150);
-  ctx.font = "400 30px Arial";
-  ctx.fillStyle = "#4A6B7C";
-  ctx.fillText("Generated from merchant preset for automated backend upload", 110, 205);
-  ctx.fillStyle = "#E51E56";
-  ctx.fillRect(110, 255, 150, 10);
-
-  ctx.fillStyle = "#0B3142";
-  ctx.font = "700 42px Arial";
-  ctx.fillText(documentLabel(docType), 110, 350);
-  ctx.font = "400 36px Arial";
-
-  presetDocumentLines(preset, docType).forEach((line, index) => {
-    ctx.fillText(line, 110, 445 + index * 78);
-  });
-
-  ctx.font = "400 28px Arial";
-  ctx.fillStyle = "#4A6B7C";
-  ctx.fillText("This file is generated locally and uploaded through the normal document API.", 110, 1425);
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((nextBlob) => {
-      if (nextBlob) resolve(nextBlob);
-      else reject(new Error("Could not create preset document"));
-    }, "image/png");
-  });
-
-  return new File([blob], pngFilename(filename), { type: "image/png", lastModified: Date.now() });
+  const lines = [
+    "TrustGate Demo Document",
+    "Generated from merchant preset for automated backend upload",
+    documentLabel(docType),
+    ...presetDocumentLines(preset, docType),
+    "This file is generated locally and uploaded through the normal document API.",
+  ];
+  const blob = createTextPdf(lines);
+  return new File([blob], pdfFilename(filename), { type: "application/pdf", lastModified: Date.now() });
 }
 
 async function loadPresetDocumentFile(preset: MerchantPreset, docType: string, docInfo: MerchantPreset["documents"][string]): Promise<File> {

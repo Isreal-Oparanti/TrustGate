@@ -27,6 +27,19 @@ function money(value?: number | null) {
   return new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN" }).format(value / 100);
 }
 
+function parseNairaToKobo(value: string) {
+  const normalized = value.replace(/,/g, "").trim();
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return 0;
+  return Math.round(Number(normalized) * 100);
+}
+
+function normalizeAmountInput(value: string) {
+  const cleaned = value.replace(/[^\d.]/g, "");
+  const [whole, ...decimalParts] = cleaned.split(".");
+  const decimal = decimalParts.join("").slice(0, 2);
+  return decimalParts.length ? `${whole}.${decimal}` : whole;
+}
+
 function responseData(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
@@ -92,10 +105,16 @@ export default function VendorPortalPage() {
   }
 
   async function initiatePayment() {
+    const amount = parseNairaToKobo(paymentForm.amount);
+    if (amount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+
     setPaymentBusy(true);
     try {
       const response = await api.initiatePayment({
-        amount: Number(paymentForm.amount),
+        amount,
         customer_name: paymentForm.customer_name,
         customer_email: paymentForm.customer_email,
         security_answer: paymentForm.security_answer,
@@ -104,6 +123,7 @@ export default function VendorPortalPage() {
       setPaymentRef(response.transaction_ref);
       setLookupRef(response.transaction_ref);
       setCheckoutUrl(response.checkout_url || "");
+      setPaymentForm((current) => ({ ...current, security_answer: "" }));
       await mutate(["payments", activeVendorId, undefined]);
       toast.success("Payment link created");
     } catch (error) {
@@ -139,7 +159,8 @@ export default function VendorPortalPage() {
       toast.error("Enter a 10 digit account number");
       return;
     }
-    if (!Number(transferForm.amount) || Number(transferForm.amount) <= 0) {
+    const amount = parseNairaToKobo(transferForm.amount);
+    if (amount <= 0) {
       toast.error("Enter a valid amount");
       return;
     }
@@ -183,10 +204,16 @@ export default function VendorPortalPage() {
       toast.error("Lookup the account before sending money");
       return;
     }
+    const amount = parseNairaToKobo(transferForm.amount);
+    if (amount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+
     setTransferBusy(true);
     try {
       await api.initiateTransfer({
-        amount: Number(transferForm.amount),
+        amount,
         bank_code: transferForm.bank_code,
         account_number: transferForm.account_number,
         account_name: transferForm.account_name,
@@ -300,7 +327,7 @@ export default function VendorPortalPage() {
               {(payments || []).slice(0, 5).map((payment) => (
                 <div key={payment.id || payment.transaction_ref} className="border-t border-[#E5E9ED] py-3 text-[12px]">
                   <p className="font-medium text-[#0B3142]">{payment.customer_name || payment.customer_email}</p>
-                  <p className="text-[#4A6B7C]">{money(payment.amount)} · {payment.status}</p>
+                  <p className="text-[#4A6B7C]">{money(payment.amount)}</p>
                 </div>
               ))}
               {!payments?.length ? <p className="text-[12px] text-[#4A6B7C]">No payments yet.</p> : null}
@@ -312,12 +339,19 @@ export default function VendorPortalPage() {
           <Card>
             <h2 className="text-[16px] font-semibold text-[#0B3142]">Initiate Payment</h2>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <Input label="Amount" inputMode="numeric" value={paymentForm.amount} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: event.target.value }))} />
+              <Input label="Amount (NGN)" inputMode="decimal" value={paymentForm.amount} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: normalizeAmountInput(event.target.value) }))} />
               <Input label="Customer Name" value={paymentForm.customer_name} onChange={(event) => setPaymentForm((current) => ({ ...current, customer_name: event.target.value }))} />
               <Input label="Customer Email" type="email" value={paymentForm.customer_email} onChange={(event) => setPaymentForm((current) => ({ ...current, customer_email: event.target.value }))} />
               <Input
-                label={securityAnswerLabel}
+                className="bg-[#F8F9FA] text-[#4A6B7C]"
+                label="Security Question"
+                readOnly
+                value={securityAnswerLabel}
+              />
+              <Input
+                label="Security Answer"
                 type={showPaymentAnswer ? "text" : "password"}
+                autoComplete="new-password"
                 value={paymentForm.security_answer}
                 onChange={(event) => setPaymentForm((current) => ({ ...current, security_answer: event.target.value }))}
                 rightElement={
@@ -385,7 +419,7 @@ export default function VendorPortalPage() {
                   }
                 }
               />
-              <Input label="Amount" inputMode="numeric" value={transferForm.amount} onChange={(event) => setTransferForm((current) => ({ ...current, amount: event.target.value }))} />
+              <Input label="Amount (NGN)" inputMode="decimal" value={transferForm.amount} onChange={(event) => setTransferForm((current) => ({ ...current, amount: normalizeAmountInput(event.target.value) }))} />
               <Input className="sm:col-span-2" label="Remark (optional)" value={transferForm.remark} onChange={(event) => setTransferForm((current) => ({ ...current, remark: event.target.value }))} />
               <Input
                 className="sm:col-span-2"
@@ -491,7 +525,7 @@ export default function VendorPortalPage() {
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-[#4A6B7C]">Amount</span>
-                <span className="font-semibold text-[#0B3142]">{money(Number(transferForm.amount))}</span>
+                <span className="font-semibold text-[#0B3142]">{money(parseNairaToKobo(transferForm.amount))}</span>
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-[#4A6B7C]">Remark</span>
