@@ -62,6 +62,7 @@ export default function VendorPortalPage() {
   const [lookupRef, setLookupRef] = useState("");
   const [lookupResult, setLookupResult] = useState<Record<string, unknown> | null>(null);
   const [transferLookup, setTransferLookup] = useState<Record<string, unknown> | null>(null);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [paymentForm, setPaymentForm] = useState({
     amount: "",
     customer_name: "",
@@ -129,7 +130,7 @@ export default function VendorPortalPage() {
     }
   }
 
-  async function lookupTransferAccount() {
+  async function proceedTransfer() {
     if (!transferForm.bank_code) {
       toast.error("Select a bank");
       return;
@@ -138,6 +139,15 @@ export default function VendorPortalPage() {
       toast.error("Enter a 10 digit account number");
       return;
     }
+    if (!Number(transferForm.amount) || Number(transferForm.amount) <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    if (!transferForm.security_answer.trim()) {
+      toast.error("Enter your security answer");
+      return;
+    }
+
     setTransferLookupBusy(true);
     try {
       const result = await api.lookupTransferAccount({
@@ -146,11 +156,13 @@ export default function VendorPortalPage() {
       });
       setTransferLookup(result as unknown as Record<string, unknown>);
       const data = responseData(result);
-      setTransferForm((current) => ({
-        ...current,
-        account_name: String(data?.account_name || data?.beneficiary_name || current.account_name),
-      }));
-      toast.success("Account confirmed");
+      const accountName = String(data?.account_name || data?.beneficiary_name || transferForm.account_name);
+      if (!accountName.trim()) {
+        toast.error("Could not confirm account name");
+        return;
+      }
+      setTransferForm((current) => ({ ...current, account_name: accountName }));
+      setTransferModalOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Account lookup failed");
     } finally {
@@ -183,6 +195,8 @@ export default function VendorPortalPage() {
       });
       toast.success("Transfer submitted");
       await mutate(`wallet-transactions-${activeVendorId}`);
+      setTransferModalOpen(false);
+      setTransferLookup(null);
       setTransferForm((current) => ({ ...current, amount: "", remark: "", security_answer: "" }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Transfer failed");
@@ -386,30 +400,15 @@ export default function VendorPortalPage() {
                 }
               />
             </div>
-            {transferForm.account_name ? (
-              <div className="mt-4 rounded-lg border border-[#D7F0E6] bg-[#E6F7F1] p-4 text-[12px]">
-                <p className="font-medium text-[#0B3142]">Verified account name</p>
-                <p className="mt-1 text-[15px] font-semibold text-[#0D9B68]">{transferForm.account_name}</p>
-              </div>
-            ) : null}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="secondary" loading={transferLookupBusy} onClick={() => void lookupTransferAccount()}>
-                Lookup Account
-              </Button>
               <Button
-                loading={transferBusy}
-                disabled={!transferForm.account_name || !transferLookup}
+                loading={transferLookupBusy}
                 leftIcon={<ArrowRight className="h-4 w-4" />}
-                onClick={() => void sendMoney()}
+                onClick={() => void proceedTransfer()}
               >
-                Send Money
+                Proceed
               </Button>
             </div>
-            {transferLookup ? (
-              <pre className="mt-4 max-h-44 overflow-auto rounded-lg border border-[#E5E9ED] bg-[#F8F9FA] p-4 text-[12px] text-[#0B3142]">
-                {JSON.stringify(transferLookup, null, 2)}
-              </pre>
-            ) : null}
           </Card>
         </section>
 
@@ -457,6 +456,69 @@ export default function VendorPortalPage() {
           </div>
         </Card>
       </div>
+
+      {transferModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B3142]/55 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-[18px] font-semibold text-[#0B3142]">Confirm Transfer</h2>
+                <p className="mt-1 text-[12px] text-[#4A6B7C]">Review the resolved account details before sending.</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg px-2 py-1 text-[13px] font-medium text-[#4A6B7C] hover:bg-[#F2F4F6]"
+                onClick={() => setTransferModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-3 rounded-lg border border-[#E5E9ED] bg-[#F8F9FA] p-4 text-[13px]">
+              <div className="flex justify-between gap-4">
+                <span className="text-[#4A6B7C]">Account name</span>
+                <span className="text-right font-semibold text-[#0B3142]">{transferForm.account_name}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-[#4A6B7C]">Account number</span>
+                <span className="font-semibold text-[#0B3142]">{transferForm.account_number}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-[#4A6B7C]">Bank</span>
+                <span className="text-right font-semibold text-[#0B3142]">
+                  {squadTransferBankOptions.find((bank) => bank.value === transferForm.bank_code)?.label || transferForm.bank_code}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-[#4A6B7C]">Amount</span>
+                <span className="font-semibold text-[#0B3142]">{money(Number(transferForm.amount))}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-[#4A6B7C]">Remark</span>
+                <span className="text-right font-semibold text-[#0B3142]">{transferForm.remark.trim() || "Purchase"}</span>
+              </div>
+            </div>
+
+            {transferLookup ? (
+              <details className="mt-4 rounded-lg border border-[#E5E9ED] bg-white p-3 text-[12px] text-[#4A6B7C]">
+                <summary className="cursor-pointer font-medium text-[#0B3142]">Transfer lookup details</summary>
+                <pre className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap text-[#0B3142]">
+                  {JSON.stringify(transferLookup, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setTransferModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button loading={transferBusy} leftIcon={<ArrowRight className="h-4 w-4" />} onClick={() => void sendMoney()}>
+                Send
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

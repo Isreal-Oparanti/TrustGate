@@ -214,29 +214,29 @@ function presetDocumentLines(preset: MerchantPreset, docType: string): string[] 
     return [
       "Corporate Affairs Commission",
       "Certificate of Incorporation",
-      "Business Name: Global Import Services Ltd",
-      "Registration Number: RC 9876543",
-      "Director: Tunde Adeyemi",
-      "Registered Address: Plot 9, Aba Industrial Market, Abia State",
+      "Business Name: Sunshine Electronics Ltd",
+      "Registration Number: RC 1234567",
+      "Director: Chioma Okonkwo",
+      "Registered Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
     ];
   }
   if (fraudPreset && docType === "utility_bill") {
     return [
       "Electricity Distribution Company",
       "Utility Bill",
-      "Customer: Tunde Adeyemi",
-      "Service Address: 18 Airport Road, Kano, Nigeria",
+      "Customer: Sunshine Electronics Ltd",
+      "Service Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
       "Billing Month: March 2026",
-      "Payment Status: Overdue",
+      "Payment Status: Paid",
     ];
   }
   if (fraudPreset && docType === "directors_id") {
     return [
       "Federal Republic of Nigeria",
       "National Identity Card",
-      "Name: Tunde Adeyemi",
-      "NIN: 10987654321",
-      "Address: 18 Airport Road, Kano, Nigeria",
+      "Name: Chioma Okonkwo",
+      "NIN: 22118456789",
+      "Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
     ];
   }
 
@@ -1043,7 +1043,7 @@ export default function NewVendorPage() {
                   <Input
                     label="Account Name"
                     helperTone="danger"
-                    helperText="Must match business name"
+                    // helperText="Must match business name"
                     value={form.account_name}
                     error={touched.account_name ? errors.account_name : undefined}
                     onBlur={() => markTouched("account_name")}

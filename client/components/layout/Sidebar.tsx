@@ -7,7 +7,6 @@ import {
   Code2,
   LayoutDashboard,
   ShieldCheck,
-  Settings,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,8 +19,7 @@ const primaryNav = [
 ];
 
 const systemNav = [
-  { label: "API Docs", href: "http://localhost:8000/docs", icon: Code2, external: true },
-  { label: "Settings", href: "/dashboard/settings", icon: Settings },
+  { label: "Github", href: "https://github.com/Isreal-Oparanti/TrustGate", icon: Code2, external: true },
 ];
 
 function isActive(pathname: string, href: string) {
