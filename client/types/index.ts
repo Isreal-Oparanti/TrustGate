@@ -1,5 +1,5 @@
 export type Tier = "tier1" | "tier2" | "tier3";
-export type Verdict = "approved" | "review" | "blocked" | "pending";
+export type Verdict = "approved" | "review" | "flagged" | "blocked" | "pending";
 export type FlagSeverity = "critical" | "high" | "medium" | "low" | "info";
 
 export interface FormState {
@@ -251,7 +251,7 @@ export interface TransferInitiateRequest {
   bank_code: string;
   account_number: string;
   account_name: string;
-  remark: string;
+  remark?: string;
   security_answer: string;
 }
 

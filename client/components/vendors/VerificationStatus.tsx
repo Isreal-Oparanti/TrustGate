@@ -8,7 +8,7 @@ interface VerificationStatusProps {
 }
 
 export function VerificationStatus({ status }: VerificationStatusProps) {
-  const Icon = status === "approved" ? CheckCircle : status === "blocked" ? XCircle : Clock;
+  const Icon = status === "approved" ? CheckCircle : status === "flagged" || status === "blocked" ? XCircle : Clock;
 
   return (
     <div className="flex items-center gap-2">

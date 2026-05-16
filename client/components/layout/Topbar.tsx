@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Bell, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { mutate } from "swr";
 import { Button } from "@/components/ui/Button";
 
@@ -45,16 +45,6 @@ export function Topbar() {
         >
           <RefreshCw className="h-4 w-4" />
         </Button>
-        <button
-          type="button"
-          className="relative flex h-9 w-9 items-center justify-center rounded-lg text-[#4A6B7C] transition-colors hover:bg-[#F2F4F6]"
-          aria-label="Notifications"
-        >
-          <Bell className="h-5 w-5" />
-          <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#E51E56] px-1 text-[10px] font-semibold leading-none text-white">
-            3
-          </span>
-        </button>
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E51E56] text-[12px] font-semibold text-white">
           CO
         </div>

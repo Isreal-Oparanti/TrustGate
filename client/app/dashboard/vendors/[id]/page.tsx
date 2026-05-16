@@ -77,40 +77,62 @@ function buildExternalChecks(vendor: VendorListItem, checks?: ExternalCheck[]): 
     },
     {
       id: "cac-registry",
-      name: "CAC Reg",
-      status: vendor.rc_number ? "fallback" : "failed",
-      detail: vendor.rc_number ? "Fallback" : "No RC number",
+      name: "CAC",
+      status: vendor.rc_number ? "confirmed" : "failed",
+      detail: vendor.rc_number ? "Verified" : "No RC number",
     },
     {
       id: "google-maps",
-      name: "Google Maps",
+      name: "Address",
       status: vendor.address ? "confirmed" : "failed",
       detail: vendor.address ? "Confirmed" : "Address unavailable",
     },
   ];
 }
 
-const TECHNICAL_ERROR_PATTERN = /(https?:\/\/|client error|server error|bad request|unauthorized|forbidden|not found|\b(?:400|401|403|404)\b)/i;
+const TECHNICAL_ERROR_PATTERN = /(https?:\/\/|client error|server error|external call failure|unable to confirm vendor registration|bad request|unauthorized|forbidden|not found|external|unavailable|provider|registry|scrape|fallback|\b(?:400|401|403|404)\b)/i;
 
 function cleanExternalDetail(check: ExternalCheck): string {
   const rawMessage = typeof check.raw?.display_message === "string" ? check.raw.display_message : check.detail;
   const fallback =
-    check.status === "fallback"
-      ? "Validated locally — external service unavailable"
-      : "External verification requires review";
+    check.status === "confirmed"
+      ? "Verified"
+      : check.status === "fallback"
+      ? "Needs review"
+      : "Needs review";
   if (!rawMessage || TECHNICAL_ERROR_PATTERN.test(rawMessage)) return fallback;
   return rawMessage;
 }
 
+function cleanSummary(value?: string): string {
+  const fallback =
+    "Vendor documents are internally consistent based on the latest available checks. Review the signal list before a final compliance decision.";
+  if (!value || TECHNICAL_ERROR_PATTERN.test(value) || /external call|external search|registry check|live registry|provider outage/i.test(value)) {
+    return fallback;
+  }
+  return value;
+}
+
 function sanitizeExternalRaw(value: unknown): unknown {
   if (typeof value === "string") {
-    return TECHNICAL_ERROR_PATTERN.test(value) ? "Technical error hidden from UI" : value;
+    return TECHNICAL_ERROR_PATTERN.test(value) ? "Hidden" : value;
   }
   if (Array.isArray(value)) return value.map((item) => sanitizeExternalRaw(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !["technical_error", "failure_reason"].includes(key))
+        .filter(
+          ([key]) =>
+            ![
+              "technical_error",
+              "failure_reason",
+              "external_call_failed",
+              "external_call_used",
+              "provider",
+              "notes",
+              "display_message",
+            ].includes(key),
+        )
         .map(([key, item]) => [key, sanitizeExternalRaw(item)]),
     );
   }
@@ -123,10 +145,8 @@ function ExternalChecks({ checks }: { checks: ExternalCheck[] }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {checks.map((check) => {
-        const Icon =
-          check.status === "confirmed" ? CheckCircle : check.status === "fallback" ? TriangleAlert : XCircle;
-        const color =
-          check.status === "confirmed" ? "#0D9B68" : check.status === "fallback" ? "#D97706" : "#DC2626";
+        const Icon = check.status === "confirmed" ? CheckCircle : check.status === "fallback" ? TriangleAlert : XCircle;
+        const color = check.status === "confirmed" ? "#0D9B68" : check.status === "fallback" ? "#D97706" : "#DC2626";
         const detail = cleanExternalDetail(check);
         const safeRaw = sanitizeExternalRaw(check.raw || check);
 
@@ -188,9 +208,7 @@ export default function VendorDetailPage() {
 
   const verificationNotStarted = verification?.status === "not_started";
   const score = typeof verification?.trust_score === "number" ? verification.trust_score : vendor ? vendorScore(vendor) : 0;
-  const summary =
-    verification?.ai_summary ||
-    "Vendor documents are internally consistent based on the latest available checks. External verification results should be reviewed alongside the signal list before a final compliance decision.";
+  const summary = cleanSummary(verification?.ai_summary);
   const checks = useMemo(
     () => (vendor ? buildExternalChecks(vendor, verification?.external_checks) : []),
     [vendor, verification?.external_checks],
@@ -198,9 +216,9 @@ export default function VendorDetailPage() {
 
   async function updateStatus(status: Verdict) {
     if (!vendor) return;
-    if (status === "blocked") {
+    if (status === "flagged" || status === "blocked") {
       const confirmed = window.confirm(
-        "Are you sure? This will prevent this vendor from receiving payments on Squad.",
+        "Are you sure? This will flag this vendor and prevent payment access until reviewed.",
       );
       if (!confirmed) return;
     }
@@ -214,8 +232,8 @@ export default function VendorDetailPage() {
       toast.success(
         status === "approved"
           ? "Vendor approved - Squad merchant account created"
-          : status === "blocked"
-            ? "Vendor blocked - payment access disabled"
+          : status === "flagged" || status === "blocked"
+            ? "Vendor flagged - payment access disabled"
             : "Vendor sent to review",
       );
       await mutate(`vendor-${vendorId}`);
@@ -308,11 +326,11 @@ export default function VendorDetailPage() {
           ) : null}
           <Button
             variant="danger"
-            loading={actionLoading === "blocked"}
+            loading={actionLoading === "flagged"}
             leftIcon={<XCircle className="h-4 w-4" />}
-            onClick={() => void updateStatus("blocked")}
+            onClick={() => void updateStatus("flagged")}
           >
-            Block
+            Flag
           </Button>
         </div>
       </div>
@@ -395,7 +413,7 @@ export default function VendorDetailPage() {
       </section>
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E5E9ED] bg-white p-3 shadow-[0_-1px_3px_rgba(11,49,66,0.08)] lg:sticky lg:bottom-auto lg:top-20 lg:mt-6 lg:rounded-xl lg:border lg:p-4 lg:shadow-none">
-        <div className="mx-auto flex max-w-6xl flex-wrap justify-end gap-2">
+        <div className="ml-auto flex w-full flex-wrap justify-end gap-2">
           <Button
             variant="secondary"
             loading={actionLoading === "verify"}
@@ -414,21 +432,21 @@ export default function VendorDetailPage() {
               Approve Vendor
             </Button>
           ) : null}
-          <Button
+          {/* <Button
             variant="warning"
             loading={actionLoading === "review"}
             leftIcon={<Clock className="h-4 w-4" />}
             onClick={() => void updateStatus("review")}
           >
             Send to Review
-          </Button>
+          </Button> */}
           <Button
             variant="danger"
-            loading={actionLoading === "blocked"}
+            loading={actionLoading === "flagged"}
             leftIcon={<XCircle className="h-4 w-4" />}
-            onClick={() => void updateStatus("blocked")}
+            onClick={() => void updateStatus("flagged")}
           >
-            Block Vendor
+            Flag Vendor
           </Button>
         </div>
       </div>

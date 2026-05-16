@@ -1,25 +1,29 @@
 import asyncio
 import logging
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from app.config import settings
 from app.database import Base, engine, verify_database_connection
-from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet
-from app.routers import admin, dashboard, documents, payments, squad, transfers, vendors, verification, wallets
-from app.utils.logger import db_log, logger
+from app.models import Document, Flag, Payment, Transaction, Vendor, Verification, Wallet, WalletActivity
+from app.routers import admin, dashboard, documents, payments, squad, transactions, transfers, vendors, verification, wallets
+from app.utils.logger import agent_log, db_log, logger
 
+
+UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
 
 for _noisy in ("asyncio", "httpx", "httpcore", "watchfiles", "urllib3", "openai"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 # Keep model imports referenced so SQLAlchemy registers every table before create_all.
-_registered_models = (Document, Flag, Payment, Transaction, Vendor, Verification, Wallet)
+_registered_models = (Document, Flag, Payment, Transaction, Vendor, Verification, Wallet, WalletActivity)
 
 Base.metadata.create_all(bind=engine)
 db_log("✓ Tables verified - vendors, verifications, flags, payments, wallets, transactions")
@@ -114,6 +118,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
 app.include_router(vendors.router, prefix="/api/vendors", tags=["Vendors"])
 app.include_router(wallets.router, prefix="/api/wallets", tags=["Wallets"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
@@ -123,10 +129,21 @@ app.include_router(vendors.router, prefix=f"{settings.API_V1_PREFIX}/vendors", t
 app.include_router(verification.router, prefix=f"{settings.API_V1_PREFIX}/verify", tags=["Verification"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Documents"])
 app.include_router(squad.router, prefix=f"{settings.API_V1_PREFIX}/squad", tags=["Squad"])
+app.include_router(transactions.router, prefix=f"{settings.API_V1_PREFIX}/transactions", tags=["Transactions"])
 app.include_router(dashboard.router, prefix=f"{settings.API_V1_PREFIX}/dashboard", tags=["Dashboard"])
 app.include_router(admin.router, prefix=f"{settings.API_V1_PREFIX}/admin", tags=["Admin"])
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "database_connected": verify_database_connection()}
+    squad_enabled = bool(settings.SQUAD_SECRET_KEY) and not settings.SQUAD_MOCK_MODE
+    return {
+        "status": "ok",
+        "database_connected": verify_database_connection(),
+        "squad": {
+            "enabled": squad_enabled,
+            "mock_mode": settings.SQUAD_MOCK_MODE,
+            "base_url": settings.SQUAD_API_BASE_URL,
+            "has_secret_key": bool(settings.SQUAD_SECRET_KEY),
+        },
+    }

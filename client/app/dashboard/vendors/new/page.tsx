@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -29,7 +29,9 @@ import { Input } from "@/components/ui/Input";
 import { ScoreRing } from "@/components/ui/ScoreRing";
 import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
+import { squadSupportedBankOptions } from "@/lib/banks";
 import { getMerchantPreset, presetOptions } from "@/lib/merchantPresets";
+import type { MerchantPreset } from "@/lib/merchantPresets";
 import { setActiveVendorId } from "@/lib/session";
 import { documentLabel, formatNaira, getTierLabel, tierRequiredDocuments } from "@/lib/utils";
 import type { FormState, Tier, VendorCreate, Verification } from "@/types";
@@ -97,16 +99,6 @@ const businessCategoryOptions = [
   { label: "Other", value: "other" },
 ];
 
-const bankOptions = [
-  { label: "Select bank", value: "" },
-  { label: "GTBank", value: "058" },
-  { label: "Access Bank", value: "044" },
-  { label: "Zenith Bank", value: "057" },
-  { label: "UBA", value: "033" },
-  { label: "First Bank", value: "011" },
-  { label: "Other", value: "000" },
-];
-
 const stepOneFields: FormField[] = [
   "business_name",
   "rc_number",
@@ -154,9 +146,6 @@ function validate(form: FormState): Partial<Record<FormField, string>> {
   }
   if (!form.address.trim()) errors.address = "Registered address is required";
   if (!form.bank_code) errors.bank_code = "Select a settlement bank";
-  if (form.bank_code && !["058", "000013"].includes(form.bank_code)) {
-    errors.bank_code = "Use GTBank for wallet-compatible settlement";
-  }
   if (!/^\d{10}$/.test(form.account_number.trim())) errors.account_number = "Enter a 10 digit account number";
   if (!form.account_name.trim()) errors.account_name = "Account name is required";
   if (!form.payment_security_question.trim()) errors.payment_security_question = "Security question is required";
@@ -202,6 +191,160 @@ function formatFileSize(file?: File): string {
   const sizeMb = file.size / (1024 * 1024);
   if (sizeMb >= 0.1) return `${sizeMb.toFixed(1)}MB`;
   return `${Math.max(1, Math.round(file.size / 1024))}KB`;
+}
+
+function pngFilename(filename: string): string {
+  return `${filename.replace(/\.[^/.]+$/, "")}.png`;
+}
+
+function apiBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+}
+
+function presetDocumentLines(preset: MerchantPreset, docType: string): string[] {
+  const data = preset.data;
+  const businessName = String(data.business_name ?? "Preset Merchant");
+  const directorName = String(data.director_name ?? "Director Name");
+  const rcNumber = String(data.rc_number ?? "RC 0000000");
+  const address = String(data.address ?? "Registered address unavailable");
+  const accountName = String(data.account_name ?? businessName);
+  const fraudPreset = preset.name.toLowerCase().includes("fraud");
+
+  if (fraudPreset && docType === "cac_certificate") {
+    return [
+      "Corporate Affairs Commission",
+      "Certificate of Incorporation",
+      "Business Name: Sunshine Electronics Ltd",
+      "Registration Number: RC 1234567",
+      "Director: Chioma Okonkwo",
+      "Registered Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
+    ];
+  }
+  if (fraudPreset && docType === "utility_bill") {
+    return [
+      "Electricity Distribution Company",
+      "Utility Bill",
+      "Customer: Sunshine Electronics Ltd",
+      "Service Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
+      "Billing Month: March 2026",
+      "Payment Status: Paid",
+    ];
+  }
+  if (fraudPreset && docType === "directors_id") {
+    return [
+      "Federal Republic of Nigeria",
+      "National Identity Card",
+      "Name: Chioma Okonkwo",
+      "NIN: 22118456789",
+      "Address: No. 45, Lekki Phase 1, Lagos, Nigeria",
+    ];
+  }
+
+  if (docType === "cac_certificate") {
+    return [
+      "Corporate Affairs Commission",
+      "Certificate of Incorporation",
+      `Business Name: ${businessName}`,
+      `Registration Number: ${rcNumber}`,
+      `Director: ${directorName}`,
+      `Registered Address: ${address}`,
+    ];
+  }
+  if (docType === "utility_bill") {
+    return [
+      "Electricity Distribution Company",
+      "Utility Bill",
+      `Customer: ${businessName}`,
+      `Service Address: ${address}`,
+      "Billing Month: March 2026",
+      "Payment Status: Paid",
+    ];
+  }
+  if (docType === "directors_id") {
+    return [
+      "Federal Republic of Nigeria",
+      "National Identity Card",
+      `Name: ${directorName}`,
+      `NIN: ${String(data.nin ?? "00000000000")}`,
+      `Address: ${address}`,
+    ];
+  }
+  if (docType === "bank_statement") {
+    return [
+      "Bank Account Statement",
+      `Account Name: ${accountName}`,
+      `Account Number: ${String(data.account_number ?? "0000000000")}`,
+      `Business: ${businessName}`,
+      "Statement Period: January 2026 - March 2026",
+    ];
+  }
+  return [
+    documentLabel(docType),
+    `Business Name: ${businessName}`,
+    `Registration Number: ${rcNumber}`,
+    `Director: ${directorName}`,
+    `Registered Address: ${address}`,
+  ];
+}
+
+async function createPresetDocumentFile(preset: MerchantPreset, docType: string, filename: string): Promise<File> {
+  const canvas = window.document.createElement("canvas");
+  canvas.width = 1200;
+  canvas.height = 1600;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not prepare preset document");
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "#0B3142";
+  ctx.lineWidth = 6;
+  ctx.strokeRect(56, 56, canvas.width - 112, canvas.height - 112);
+  ctx.fillStyle = "#0B3142";
+  ctx.font = "700 54px Arial";
+  ctx.fillText("TrustGate Demo Document", 110, 150);
+  ctx.font = "400 30px Arial";
+  ctx.fillStyle = "#4A6B7C";
+  ctx.fillText("Generated from merchant preset for automated backend upload", 110, 205);
+  ctx.fillStyle = "#E51E56";
+  ctx.fillRect(110, 255, 150, 10);
+
+  ctx.fillStyle = "#0B3142";
+  ctx.font = "700 42px Arial";
+  ctx.fillText(documentLabel(docType), 110, 350);
+  ctx.font = "400 36px Arial";
+
+  presetDocumentLines(preset, docType).forEach((line, index) => {
+    ctx.fillText(line, 110, 445 + index * 78);
+  });
+
+  ctx.font = "400 28px Arial";
+  ctx.fillStyle = "#4A6B7C";
+  ctx.fillText("This file is generated locally and uploaded through the normal document API.", 110, 1425);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) resolve(nextBlob);
+      else reject(new Error("Could not create preset document"));
+    }, "image/png");
+  });
+
+  return new File([blob], pngFilename(filename), { type: "image/png", lastModified: Date.now() });
+}
+
+async function loadPresetDocumentFile(preset: MerchantPreset, docType: string, docInfo: MerchantPreset["documents"][string]): Promise<File> {
+  if (!docInfo.sourcePath) {
+    return createPresetDocumentFile(preset, docType, docInfo.filename);
+  }
+
+  const response = await fetch(`${apiBaseUrl()}${docInfo.sourcePath}`);
+  if (!response.ok) {
+    throw new Error(`Could not load ${documentLabel(docType)} from preset source`);
+  }
+  const blob = await response.blob();
+  return new File([blob], docInfo.filename, {
+    type: blob.type || "image/png",
+    lastModified: Date.now(),
+  });
 }
 
 function UploadedDocumentList({
@@ -324,6 +467,10 @@ export default function NewVendorPage() {
   const [uploadStatuses, setUploadStatuses] = useState<Record<string, UploadStatus>>({});
   const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [viewingReport, setViewingReport] = useState(false);
+  const [approvingVendor, setApprovingVendor] = useState(false);
+  const [vendorApproved, setVendorApproved] = useState(false);
+  const [isReportPending, startReportTransition] = useTransition();
   const [checkingBusinessName, setCheckingBusinessName] = useState(false);
   const [duplicateBusinessName, setDuplicateBusinessName] = useState<string | null>(null);
   const [verificationStage, setVerificationStage] = useState<VerificationStageId>("idle");
@@ -336,7 +483,7 @@ export default function NewVendorPage() {
   };
   const requiredDocs = useMemo(() => tierRequiredDocuments(form.tier), [form.tier]);
 
-  function loadPreset(presetName: string) {
+  async function loadPreset(presetName: string) {
     const preset = getMerchantPreset(presetName);
     if (!preset) return;
 
@@ -346,23 +493,22 @@ export default function NewVendorPage() {
       ...preset.data,
     }));
 
-    // Simulate document uploads
     const simulatedDocs: Record<string, File> = {};
     const simulatedStatuses: Record<string, UploadStatus> = {};
 
-    Object.entries(preset.documents).forEach(([docType, docInfo]) => {
-      // Create a mock file
-      const mockFile = new File(
-        [new ArrayBuffer(1024)], // 1KB mock content
-        docInfo.filename,
-        { type: "application/pdf" }
-      );
-      simulatedDocs[docType] = mockFile;
-      simulatedStatuses[docType] = {
-        state: "success",
-        progress: 100,
-      };
-    });
+    try {
+      await Promise.all(Object.entries(preset.documents).map(async ([docType, docInfo]) => {
+        simulatedDocs[docType] = await loadPresetDocumentFile(preset, docType, docInfo);
+        simulatedStatuses[docType] = {
+          state: "idle",
+          progress: 0,
+        };
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not load preset documents";
+      toast.error(message);
+      return;
+    }
 
     setDocuments(simulatedDocs);
     setUploadStatuses(simulatedStatuses);
@@ -373,7 +519,7 @@ export default function NewVendorPage() {
     }
 
     // Show success toast
-    toast.success("Demo merchant loaded successfully", {
+    toast.success("Demo merchant loaded. Documents will upload on submit.", {
       duration: 3000,
     });
   }
@@ -589,6 +735,30 @@ export default function NewVendorPage() {
     }
   }
 
+  function viewFullReport() {
+    if (!verificationResult) return;
+    setViewingReport(true);
+    startReportTransition(() => {
+      router.push(`/dashboard/vendors/${verificationResult.vendor_id}`);
+    });
+  }
+
+  async function approveVendor() {
+    if (!verificationResult || approvingVendor || vendorApproved) return;
+
+    setApprovingVendor(true);
+    const toastId = toast.loading("Approving vendor...");
+    try {
+      await api.updateVendorStatus(verificationResult.vendor_id, "approved");
+      setVendorApproved(true);
+      toast.success("Vendor approved - Squad merchant account created", { id: toastId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not approve vendor", { id: toastId });
+    } finally {
+      setApprovingVendor(false);
+    }
+  }
+
   const monthlyVolume = nairaToKobo(form.expected_monthly_volume);
   const selectedCategory = businessCategoryOptions.find((option) => option.value === form.business_category)?.label;
 
@@ -604,7 +774,7 @@ export default function NewVendorPage() {
               value=""
               onChange={(event) => {
                 if (event.target.value) {
-                  loadPreset(event.target.value);
+                  void loadPreset(event.target.value);
                   // Reset select after loading
                   event.target.value = "";
                 }
@@ -625,9 +795,26 @@ export default function NewVendorPage() {
           </Badge>
           <h3 className="mt-5 text-[22px] font-bold text-[#0B3142]">Verification complete</h3>
           <p className="mt-1 text-[13px] text-[#4A6B7C]">The AI report is ready for compliance review.</p>
-          <Button className="mt-6" size="lg" onClick={() => router.push(`/dashboard/vendors/${verificationResult.vendor_id}`)}>
-            View Full Report
-          </Button>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <Button
+              size="lg"
+              loading={viewingReport || isReportPending}
+              onClick={viewFullReport}
+            >
+              View Full Report
+            </Button>
+            <Button
+              className={vendorApproved ? "blur-[0.5px]" : undefined}
+              size="lg"
+              variant="success"
+              loading={approvingVendor}
+              disabled={vendorApproved}
+              leftIcon={<CheckCircle className="h-4 w-4" />}
+              onClick={() => void approveVendor()}
+            >
+              {vendorApproved ? "Approved" : "Approve"}
+            </Button>
+          </div>
         </Card>
       ) : (
         <Card>
@@ -831,12 +1018,12 @@ export default function NewVendorPage() {
                 <div className="mt-5 grid gap-5 md:grid-cols-3">
                   <Select
                     label="Bank Name"
-                    options={bankOptions}
+                    options={squadSupportedBankOptions}
                     value={form.bank_code}
                     error={touched.bank_code ? errors.bank_code : undefined}
                     onBlur={() => markTouched("bank_code")}
                     onChange={(event) => {
-                      const bank = bankOptions.find((option) => option.value === event.target.value);
+                      const bank = squadSupportedBankOptions.find((option) => option.value === event.target.value);
                       setForm((current) => ({
                         ...current,
                         bank_code: event.target.value,
@@ -856,7 +1043,7 @@ export default function NewVendorPage() {
                   <Input
                     label="Account Name"
                     helperTone="danger"
-                    helperText="Must match business name"
+                    // helperText="Must match business name"
                     value={form.account_name}
                     error={touched.account_name ? errors.account_name : undefined}
                     onBlur={() => markTouched("account_name")}

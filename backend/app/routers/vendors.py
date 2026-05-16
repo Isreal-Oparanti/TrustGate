@@ -4,15 +4,18 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_vendor
 from app.models.vendor import Vendor
+from app.models.verification import Verification
 from app.schemas.vendor import (
     TierEnum,
     VendorCreate,
     VendorCreateResponse,
+    VendorLogin,
     VendorOut,
     VendorStatusUpdate,
 )
@@ -21,6 +24,21 @@ from app.utils.logger import db_log, logger
 
 
 router = APIRouter()
+
+
+def _attach_latest_verification_score(vendor: Vendor, db: Session) -> Vendor:
+    latest = (
+        db.query(Verification)
+        .filter(Verification.vendor_id == vendor.id)
+        .order_by(Verification.created_at.desc())
+        .first()
+    )
+    score = latest.trust_score if latest else None
+    setattr(vendor, "trust_score", score)
+    setattr(vendor, "verification_score", score)
+    if latest and vendor.status in {"pending", "review", "flagged", "blocked"}:
+        vendor.status = latest.verdict
+    return vendor
 
 
 def validate_vendor_fields(payload: VendorCreate) -> list[str]:
@@ -46,9 +64,17 @@ def validate_vendor_fields(payload: VendorCreate) -> list[str]:
         errors.append("NIN appears to be a placeholder value")
         nin_status = "⚠ placeholder"
 
-    if payload.phone and not re.match(r"^(\+?234|0)[789][01]\d{8}$", payload.phone):
-        errors.append("Invalid Nigerian phone number format")
+    if payload.phone and not re.match(r"^(234|0)[789][01]\d{8}$", payload.phone):
+        errors.append("Invalid Nigerian phone number format. Use 08012345678 or 2348012345678.")
         phone_status = "✗"
+
+    if payload.settlement_account_number and not re.match(r"^\d{10}$", payload.settlement_account_number):
+        errors.append("Settlement account number must be exactly 10 digits")
+
+    settlement_bank_code = (payload.settlement_bank_code or "").strip()
+    settlement_bank = (payload.settlement_bank or "").strip().lower()
+    if settlement_bank_code not in {"058", "000013"} and "gtbank" not in settlement_bank and "guaranty trust" not in settlement_bank:
+        errors.append("Wallet-compatible settlement bank must be GTBank")
 
     if tier in ["tier2", "tier3"] and payload.email:
         free_domains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"]
@@ -83,6 +109,11 @@ def _extract_squad_account_id(squad_response: dict[str, Any]) -> str | None:
     return squad_response.get("account_id") or squad_response.get("merchant_id") or squad_response.get("id")
 
 
+def _needs_squad_sync(vendor: Vendor) -> bool:
+    squad_id = vendor.squad_account_id or vendor.squad_merchant_id
+    return not squad_id or squad_id.startswith("mock_sub_")
+
+
 def _sync_vendor_to_squad_sub_merchant(vendor: Vendor, db: Session) -> dict[str, Any]:
     try:
         squad_response = create_merchant(vendor)
@@ -91,9 +122,8 @@ def _sync_vendor_to_squad_sub_merchant(vendor: Vendor, db: Session) -> dict[str,
         raise HTTPException(status_code=502, detail=f"Squad sub-merchant creation failed: {exc}") from exc
 
     vendor.squad_account_id = _extract_squad_account_id(squad_response)
+    vendor.squad_merchant_id = vendor.squad_account_id
     vendor.settlement_status = "active" if vendor.squad_account_id else "pending"
-    if vendor.squad_account_id:
-        vendor.status = "approved"
     db.commit()
     db.refresh(vendor)
     return squad_response
@@ -104,7 +134,8 @@ def create_vendor(
     payload: VendorCreate,
     db: Session = Depends(get_db),
 ):
-    existing_vendor = db.query(Vendor).filter(Vendor.business_name == payload.business_name).first()
+    business_name = " ".join(payload.business_name.split())
+    existing_vendor = db.query(Vendor).filter(func.lower(Vendor.business_name) == business_name.lower()).first()
     if existing_vendor:
         raise HTTPException(status_code=409, detail="Business name already exists")
 
@@ -120,7 +151,7 @@ def create_vendor(
 
     vendor = Vendor(
         id=str(uuid.uuid4()),
-        business_name=payload.business_name,
+        business_name=business_name,
         rc_number=payload.rc_number or None,
         website_url=payload.website_url or None,
         social_media_url=payload.social_media_url or None,
@@ -149,11 +180,32 @@ def create_vendor(
     )
     db_log(f"→ Saving vendor: {vendor.business_name} | tier: {vendor.tier} | id: {vendor.id}")
     db.add(vendor)
-    db.flush()
-
-    squad_response = _sync_vendor_to_squad_sub_merchant(vendor, db)
+    db.commit()
+    db.refresh(vendor)
     db_log(f"✓ Vendor saved - id: {vendor.id}")
-    return {"vendor": vendor, "squad_response": squad_response}
+    return {
+        "vendor": vendor,
+        "squad_response": {"message": "Vendor saved pending approval. Squad sync will run after approval."},
+    }
+
+
+@router.post("/login", response_model=VendorOut)
+def login_vendor(payload: VendorLogin, db: Session = Depends(get_db)):
+    business_name = " ".join(payload.business_name.split())
+    rc_number = (payload.rc_number or "").strip()
+    vendor = (
+        db.query(Vendor)
+        .filter(
+            func.lower(Vendor.business_name) == business_name.lower(),
+            func.lower(func.coalesce(Vendor.rc_number, "")) == rc_number.lower(),
+        )
+        .first()
+    )
+    if not vendor:
+        raise HTTPException(status_code=401, detail="Business name or RC number is incorrect")
+    if vendor.status != "approved":
+        raise HTTPException(status_code=403, detail="Vendor must be approved before accessing the vendor portal")
+    return vendor
 
 
 @router.get("/", response_model=list[VendorOut])
@@ -167,7 +219,13 @@ def list_vendors(
         query = query.filter(Vendor.status == status)
     if tier:
         query = query.filter(Vendor.tier == tier.value)
-    return query.order_by(Vendor.created_at.desc()).all()
+    vendors = query.order_by(Vendor.created_at.desc()).all()
+    return [_attach_latest_verification_score(vendor, db) for vendor in vendors]
+
+
+@router.get("/me", response_model=VendorOut)
+def get_logged_in_vendor(current_vendor: Vendor = Depends(get_current_vendor)):
+    return current_vendor
 
 
 @router.get("/{vendor_id}", response_model=VendorOut)
@@ -175,7 +233,7 @@ def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
     vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    return vendor
+    return _attach_latest_verification_score(vendor, db)
 
 
 @router.patch("/{vendor_id}/status", response_model=VendorOut)
@@ -184,6 +242,12 @@ def update_vendor_status(vendor_id: str, payload: VendorStatusUpdate, db: Sessio
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     vendor.status = payload.status.value
+
+    if payload.status.value == "approved" and _needs_squad_sync(vendor):
+        db.flush()
+        _sync_vendor_to_squad_sub_merchant(vendor, db)
+        return vendor
+
     db.commit()
     db.refresh(vendor)
     return vendor
@@ -196,8 +260,3 @@ def delete_vendor(vendor_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Vendor not found")
     db.delete(vendor)
     db.commit()
-
-
-@router.get("/me", response_model=VendorOut)
-def get_logged_in_vendor(current_vendor: Vendor = Depends(get_current_vendor)):
-    return current_vendor

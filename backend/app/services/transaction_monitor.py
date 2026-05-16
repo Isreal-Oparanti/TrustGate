@@ -22,6 +22,9 @@ class MonitorResult:
     merchant_id: str
     transaction_ref: str
     flags: list[Flag]
+    risk_score: int
+    dynamic_trust_score: int | None
+    action: str
     suspended: bool
     checked_at: dt.datetime
 
@@ -43,6 +46,30 @@ def get_transaction_history(merchant_id: str, db: Session) -> list[Transaction]:
         .order_by(Transaction.created_at.asc())
         .all()
     )
+
+
+def _resolve_vendor(merchant_id: str, db: Session) -> Vendor | None:
+    return (
+        db.query(Vendor)
+        .filter(or_(Vendor.squad_merchant_id == merchant_id, Vendor.squad_account_id == merchant_id, Vendor.id == merchant_id))
+        .first()
+    )
+
+
+def _latest_verification(vendor_id: str, db: Session) -> Verification | None:
+    return (
+        db.query(Verification)
+        .filter(Verification.vendor_id == vendor_id)
+        .order_by(Verification.created_at.desc())
+        .first()
+    )
+
+
+def _created_at_from_payload(payload: dict) -> dt.datetime:
+    value = payload.get("created_at")
+    if isinstance(value, dt.datetime):
+        return _as_aware(value)
+    return dt.datetime.now(dt.UTC)
 
 
 def _make_flag(
@@ -75,20 +102,11 @@ def _legacy_severity(severity: FlagSeverity) -> int:
 def save_transaction_flags(merchant_id: str, transaction_ref: str, flags: list[Flag], db: Session) -> None:
     if not flags:
         return
-    vendor = (
-        db.query(Vendor)
-        .filter(or_(Vendor.squad_merchant_id == merchant_id, Vendor.id == merchant_id))
-        .first()
-    )
+    vendor = _resolve_vendor(merchant_id, db)
     if not vendor:
         txn_log(f"   Unable to save transaction flags — vendor not found for merchant {merchant_id}", "warning")
         return
-    verification = (
-        db.query(Verification)
-        .filter(Verification.vendor_id == vendor.id)
-        .order_by(Verification.created_at.desc())
-        .first()
-    )
+    verification = _latest_verification(vendor.id, db)
     if not verification:
         txn_log(f"   Unable to save transaction flags — no verification row for vendor {vendor.id}", "warning")
         return
@@ -109,6 +127,50 @@ def save_transaction_flags(merchant_id: str, transaction_ref: str, flags: list[F
     db.commit()
 
 
+def _risk_points(severity: FlagSeverity) -> int:
+    return {
+        FlagSeverity.INFO: 0,
+        FlagSeverity.LOW: 6,
+        FlagSeverity.MEDIUM: 14,
+        FlagSeverity.HIGH: 24,
+        FlagSeverity.CRITICAL: 38,
+    }[severity]
+
+
+def _apply_behaviour_score(
+    vendor: Vendor | None,
+    transaction_ref: str,
+    flags: list[Flag],
+    db: Session,
+) -> tuple[int, int | None, str, bool]:
+    risk_score = min(100, sum(_risk_points(flag.severity) for flag in flags))
+    high_signal_count = sum(1 for flag in flags if flag.severity in {FlagSeverity.HIGH, FlagSeverity.CRITICAL})
+    suspended = risk_score >= 65 or high_signal_count >= 2
+    action = "restrict" if suspended else "review" if flags else "monitor"
+    dynamic_score: int | None = None
+
+    if vendor:
+        transaction = db.query(Transaction).filter(Transaction.transaction_ref == transaction_ref).first()
+        if transaction:
+            transaction.flagged = bool(flags)
+
+        verification = _latest_verification(vendor.id, db)
+        if verification:
+            dynamic_score = max(0, int(verification.trust_score or 0) - risk_score)
+            verification.behaviour_score = max(0, int(verification.behaviour_score or 0) - risk_score)
+            verification.trust_score = min(int(verification.trust_score or 0), dynamic_score)
+            if suspended:
+                verification.risk_level = "HIGH"
+                verification.verdict = "flagged"
+
+        if suspended:
+            vendor.status = "flagged"
+
+        db.commit()
+
+    return risk_score, dynamic_score, action, suspended
+
+
 async def monitor_transaction(
     merchant_id: str,
     new_transaction: dict,
@@ -116,16 +178,19 @@ async def monitor_transaction(
 ) -> MonitorResult:
     flags: list[Flag] = []
     history = get_transaction_history(merchant_id, db)
+    transaction_ref = new_transaction["transaction_ref"]
+    previous_history = [txn for txn in history if txn.transaction_ref != transaction_ref]
+    vendor = _resolve_vendor(merchant_id, db)
     amount_naira = _amount_naira(new_transaction["amount"])
-    total_naira = sum(txn.amount for txn in history) / 100
+    total_naira = sum(txn.amount for txn in previous_history) / 100
 
     txn_log(f"▶ Monitoring transaction for merchant: {merchant_id}")
     txn_log(f"   New txn: ₦{amount_naira:,.0f} from {new_transaction.get('customer_email', '')}")
-    txn_log(f"   Merchant history: {len(history)} transactions | total: ₦{total_naira:,.0f}")
+    txn_log(f"   Merchant history: {len(previous_history)} previous transactions | total: ₦{total_naira:,.0f}")
 
-    now = dt.datetime.now(dt.UTC)
+    now = _created_at_from_payload(new_transaction)
     week_ago = now - dt.timedelta(days=7)
-    week_transactions = [txn for txn in history if _as_aware(txn.created_at) > week_ago]
+    week_transactions = [txn for txn in previous_history if _as_aware(txn.created_at) > week_ago]
     week_total = sum(txn.amount for txn in week_transactions) / 100
 
     if week_total > 0:
@@ -159,12 +224,42 @@ async def monitor_transaction(
             txn_log("   [CHECK] Velocity → PASS")
         txn_log(f"   [CHECK] Velocity: 7-day total ₦{week_total:,.0f} → new txn is {ratio:.1f}x → {status}")
     else:
-        txn_log(f"   [CHECK] Velocity: 7-day total ₦0 → new txn is baseline → PASS")
+        txn_log("   [CHECK] Velocity: 7-day total ₦0 → new txn is baseline → PASS")
+
+    expected_monthly = _amount_naira(getattr(vendor, "expected_monthly_volume", 0))
+    if expected_monthly > 0:
+        month_ago = now - dt.timedelta(days=30)
+        month_total = sum(txn.amount for txn in previous_history if _as_aware(txn.created_at) > month_ago) / 100
+        projected_month_total = month_total + amount_naira
+        expected_ratio = projected_month_total / expected_monthly
+        txn_log(
+            f"   [CHECK] Expected volume: projected ₦{projected_month_total:,.0f} vs expected ₦{expected_monthly:,.0f} → {expected_ratio:.1f}x"
+        )
+        if expected_ratio >= 4:
+            flags.append(
+                _make_flag(
+                    "expected_volume_breakout",
+                    FlagSeverity.HIGH,
+                    f"Merchant projected volume is {expected_ratio:.1f}x expected monthly volume.",
+                    f"projected_month_total={projected_month_total}, expected_monthly={expected_monthly}, ratio={expected_ratio:.2f}",
+                    "expected_volume_deviation",
+                )
+            )
+        elif expected_ratio >= 2:
+            flags.append(
+                _make_flag(
+                    "expected_volume_breakout",
+                    FlagSeverity.MEDIUM,
+                    f"Merchant projected volume is {expected_ratio:.1f}x expected monthly volume.",
+                    f"projected_month_total={projected_month_total}, expected_monthly={expected_monthly}, ratio={expected_ratio:.2f}",
+                    "expected_volume_deviation",
+                )
+            )
 
     if amount_naira >= 100000 and amount_naira % 50000 == 0:
         historical_round = sum(
             1
-            for txn in history
+            for txn in previous_history
             if (txn.amount / 100) >= 100000 and (txn.amount / 100) % 50000 == 0
         )
         txn_log(f"   [CHECK] Round amount: ₦{amount_naira:,.0f} | historical round txns: {historical_round}")
@@ -193,9 +288,9 @@ async def monitor_transaction(
     else:
         txn_log(f"   [CHECK] Round amount: ₦{amount_naira:,.0f} → PASS")
 
-    if len(history) >= 5:
+    if len(previous_history) >= 5:
         revenue_by_email: Counter[str] = Counter()
-        for txn in history:
+        for txn in previous_history:
             if txn.customer_email:
                 revenue_by_email[txn.customer_email] += txn.amount
         if new_transaction.get("customer_email"):
@@ -220,17 +315,32 @@ async def monitor_transaction(
     else:
         txn_log("   [CHECK] Customer diversity: insufficient history → PASS")
 
-    if len(history) >= 3:
+    if now.hour < 5 and amount_naira >= 250000:
+        flags.append(
+            _make_flag(
+                "odd_hour_high_value",
+                FlagSeverity.MEDIUM,
+                f"High-value transaction occurred at {now.hour:02d}:00, outside normal trading hours.",
+                f"hour={now.hour}, amount={amount_naira}",
+                "transaction_timing",
+            )
+        )
+        txn_log("   [CHECK] Timing behaviour → FLAG MEDIUM")
+    else:
+        txn_log("   [CHECK] Timing behaviour → PASS")
+
+    if len(previous_history) >= 3:
         day_ago = now - dt.timedelta(hours=24)
-        recent = [txn for txn in history if _as_aware(txn.created_at) > day_ago]
+        recent = [txn for txn in previous_history if _as_aware(txn.created_at) > day_ago]
         recent_total = sum(txn.amount for txn in recent) / 100
-        if len(recent) >= 5 and recent_total > 1_000_000:
+        recent_total_with_new = recent_total + amount_naira
+        if len(recent) >= 5 and recent_total_with_new > 1_000_000:
             flags.append(
                 _make_flag(
                     "rapid_volume_accumulation",
                     FlagSeverity.MEDIUM,
-                    f"₦{recent_total:,.0f} accumulated in 24 hours across {len(recent)} transactions",
-                    f"recent_total={recent_total}, recent_count={len(recent)}",
+                    f"₦{recent_total_with_new:,.0f} accumulated in 24 hours across {len(recent) + 1} transactions.",
+                    f"recent_total={recent_total_with_new}, recent_count={len(recent) + 1}",
                     "rapid_volume_24h",
                 )
             )
@@ -243,17 +353,23 @@ async def monitor_transaction(
     critical_count = sum(1 for flag in flags if flag.severity in {FlagSeverity.CRITICAL, FlagSeverity.HIGH})
     txn_log(f"   Result: {len(flags)} flags raised ({critical_count} critical/high)")
 
-    suspended = critical_count >= 2
+    risk_score, dynamic_score, action, suspended = _apply_behaviour_score(vendor, transaction_ref, flags, db)
+    if flags:
+        save_transaction_flags(merchant_id, transaction_ref, flags, db)
+
     if suspended:
         txn_log("⚠ CRITICAL PATTERN DETECTED — initiating merchant suspension")
-        await update_merchant_status(merchant_id, "blocked")
+        squad_id = getattr(vendor, "squad_merchant_id", None) or getattr(vendor, "squad_account_id", None) or merchant_id
+        await update_merchant_status(squad_id, "flagged")
         txn_log(f"✓ Merchant {merchant_id} suspended via Squad API")
-        save_transaction_flags(merchant_id, new_transaction["transaction_ref"], flags, db)
 
     return MonitorResult(
         merchant_id=merchant_id,
-        transaction_ref=new_transaction["transaction_ref"],
+        transaction_ref=transaction_ref,
         flags=flags,
+        risk_score=risk_score,
+        dynamic_trust_score=dynamic_score,
+        action=action,
         suspended=suspended,
         checked_at=now,
     )

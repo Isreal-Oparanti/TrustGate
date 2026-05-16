@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 from enum import Enum
 from typing import Any, Optional
 
@@ -14,6 +15,7 @@ class TierEnum(str, Enum):
 class VerdictEnum(str, Enum):
     approved = "approved"
     review = "review"
+    flagged = "flagged"
     blocked = "blocked"
 
 
@@ -65,6 +67,23 @@ class VendorCreate(BaseModel):
             raise ValueError("NIN must be exactly 11 numeric characters.")
         return value
 
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        normalized = value.strip().replace(" ", "").replace("-", "")
+        if normalized.startswith("+"):
+            normalized = normalized[1:]
+        if not normalized.isdigit() or len(normalized) not in {11, 13}:
+            raise ValueError("Mobile number length should be either 11 or 13 digits.")
+        if not re.match(r"^(234|0)[789][01]\d{8}$", normalized):
+            raise ValueError("Enter a valid Nigerian mobile number.")
+        return normalized
+
+
+class VendorLogin(BaseModel):
+    business_name: str = Field(min_length=1)
+    rc_number: str = Field(min_length=1)
+
 
 class VendorStatusUpdate(BaseModel):
     status: VerdictEnum
@@ -96,6 +115,8 @@ class VendorOut(BaseModel):
     squad_merchant_id: Optional[str] = None
     settlement_status: str = "not_started"
     payment_security_question: Optional[str] = None
+    trust_score: Optional[int] = None
+    verification_score: Optional[int] = None
     created_at: dt.datetime
     updated_at: dt.datetime
 

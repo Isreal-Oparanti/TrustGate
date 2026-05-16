@@ -1,4 +1,4 @@
-import type { FlagSeverity, Tier, VendorListItem, Verdict } from "@/types";
+import type { FlagSeverity, Tier, Vendor, VendorListItem, Verdict, Wallet } from "@/types";
 
 export function formatNaira(kobo: number): string {
   return new Intl.NumberFormat("en-NG", {
@@ -44,7 +44,8 @@ export function getVerdictLabel(verdict: string): string {
   const map: Record<string, string> = {
     approved: "Approved",
     review: "Under Review",
-    blocked: "Blocked",
+    flagged: "Flagged",
+    blocked: "Flagged",
     pending: "Pending",
   };
   return map[verdict] || verdict;
@@ -74,6 +75,19 @@ export function cn(...classes: Array<string | false | null | undefined>): string
   return classes.filter(Boolean).join(" ");
 }
 
+export function walletBankName(wallet?: Wallet | null, vendor?: Vendor | null): string {
+  if (wallet?.bank) return wallet.bank;
+  if (wallet?.bank_code === "058" || wallet?.bank_code === "000013") return "GTBank";
+  if (vendor?.settlement_bank) return vendor.settlement_bank;
+  if (vendor?.bank_name) return vendor.bank_name;
+  if (wallet?.virtual_account_number) return "GTBank";
+  return "No bank";
+}
+
+export function walletAccountName(wallet?: Wallet | null, vendor?: Vendor | null): string {
+  return wallet?.account_name || vendor?.business_name || vendor?.settlement_account_name || vendor?.account_name || "No account name";
+}
+
 export function initials(name: string): string {
   return name
     .split(" ")
@@ -89,6 +103,7 @@ export function vendorScore(vendor: VendorListItem): number {
   const fallback: Record<Verdict, number> = {
     approved: 82,
     review: 52,
+    flagged: 35,
     blocked: 19,
     pending: 41,
   };

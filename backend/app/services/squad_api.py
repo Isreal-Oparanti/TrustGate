@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
@@ -37,8 +38,22 @@ def _vendor_attr(vendor: Any, name: str, default: str = "") -> str:
     return str(getattr(vendor, name, default) or default)
 
 
+def _provider_mobile(value: str) -> str:
+    mobile = value.strip().replace(" ", "").replace("-", "")
+    if mobile.startswith("+"):
+        mobile = mobile[1:]
+    return mobile
+
+
 def _amount_naira(amount_kobo: int | float | None) -> float:
     return float(amount_kobo or 0) / 100
+
+
+def _frontend_base_url(callback_url: str | None = None) -> str:
+    parsed = urlsplit(callback_url or settings.PAYMENT_CALLBACK_URL)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "http://localhost:3000"
 
 
 async def _request_json(method: str, path: str, *, json_payload: dict | None = None, params: dict | None = None) -> dict:
@@ -114,7 +129,7 @@ def create_business_virtual_account(vendor: Vendor, customer_identifier: str, be
     payload = {
         "customer_identifier": customer_identifier,
         "business_name": vendor.business_name,
-        "mobile_num": vendor.phone,
+        "mobile_num": _provider_mobile(vendor.phone),
         "bvn": vendor.bvn,
     }
     if beneficiary_account:
@@ -171,7 +186,7 @@ def query_merchant_virtual_account_transactions(params: dict) -> dict:
 def initiate_payment(payload: dict) -> dict:
     if not _squad_enabled():
         transaction_ref = payload["transaction_ref"]
-        checkout_url = f"https://sandbox-pay.squadco.com/{transaction_ref}"
+        checkout_url = f"{_frontend_base_url(payload.get('callback_url'))}/checkout/{transaction_ref}"
         logger.info("🟢 Squad mock payment initiated for ref %s", transaction_ref)
         return {
             "mode": "mock",
@@ -368,6 +383,7 @@ async def update_merchant_status(squad_account_id: str, verdict: str) -> dict:
     status_map = {
         "approved": "active",
         "review": "pending",
+        "flagged": "restricted",
         "blocked": "restricted",
     }
     new_status = status_map.get(verdict, verdict)

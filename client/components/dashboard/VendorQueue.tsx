@@ -55,11 +55,11 @@ export function VendorQueue() {
 
     try {
       await api.updateVendorStatus(vendor.id, status);
-      toast.success(
-        status === "approved"
-          ? "Vendor approved - Squad merchant account created"
-          : "Vendor blocked - payment access disabled",
-      );
+        toast.success(
+          status === "approved"
+            ? "Vendor approved - Squad merchant account created"
+            : "Vendor flagged - payment access disabled",
+        );
       await mutate("queue");
       await mutate("stats");
     } catch (err) {
@@ -158,10 +158,10 @@ export function VendorQueue() {
                     <Button
                       size="sm"
                       variant="dangerOutline"
-                      loading={actionLoading === `${vendor.id}-blocked`}
-                      onClick={(event) => void updateStatus(event, vendor, "blocked")}
+                      loading={actionLoading === `${vendor.id}-flagged`}
+                      onClick={(event) => void updateStatus(event, vendor, "flagged")}
                     >
-                      Block
+                      Flag
                     </Button>
                   </span>
                 </span>

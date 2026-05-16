@@ -6,6 +6,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_vendor
 from app.models.vendor import Vendor
+from app.models.wallet import Wallet, WalletActivity
 from app.schemas.transfer import (
     SquadPassthroughResponse,
     TransferAccountLookupRequest,
@@ -44,6 +45,11 @@ def _ensure_vendor_can_transact(vendor: Vendor):
         raise HTTPException(status_code=409, detail="Vendor must be approved before sending money")
     if not vendor.squad_account_id:
         raise HTTPException(status_code=409, detail="Vendor must be activated as a Squad sub-merchant first")
+
+
+def _transfer_status(response: dict) -> str:
+    data = _extract_squad_data(response)
+    return str(data.get("transaction_status") or data.get("status") or response.get("message") or "submitted")
 
 
 @router.post("/account-lookup", response_model=SquadPassthroughResponse)
@@ -89,7 +95,7 @@ def send_money(
         "account_number": payload.account_number,
         "account_name": _extract_verified_account_name(lookup_response, payload.account_name),
         "currency_id": "NGN",
-        "remark": payload.remark,
+        "remark": payload.remark or "Purchase",
     }
 
     try:
@@ -99,6 +105,24 @@ def send_money(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Squad transfer failed: {exc}") from exc
 
+    wallet = db.query(Wallet).filter(Wallet.vendor_id == current_vendor.id).first()
+    activity = WalletActivity(
+        id=str(uuid.uuid4()),
+        vendor_id=current_vendor.id,
+        wallet_id=wallet.id if wallet else None,
+        activity_type="transfer",
+        direction="debit",
+        reference=transaction_reference,
+        amount=payload.amount,
+        currency="NGN",
+        account_name=squad_payload["account_name"],
+        account_number=payload.account_number,
+        bank_code=payload.bank_code,
+        narration=squad_payload["remark"],
+        status=_transfer_status(squad_response),
+        squad_response=squad_response,
+    )
+    db.add(activity)
     db.commit()
     return {"squad_response": squad_response}
 

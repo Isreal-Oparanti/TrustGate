@@ -21,7 +21,7 @@ const signalLabels: Record<string, string> = {
   partial_address_match: "Partial address match",
   rc_not_found: "RC number not found in documents",
   rc_mismatch: "RC number differs from document",
-  cac_rc_document_mismatch: "CAC RC number differs from document",
+  cac_rc_document_mismatch: "RC number differs from document",
   director_name_mismatch: "Director name mismatch",
   director_single_document_only: "Director appears in one document only",
   bvn_name_mismatch: "BVN name mismatch",
@@ -30,7 +30,7 @@ const signalLabels: Record<string, string> = {
   weak_web_presence: "Limited public web presence",
   weak_web_footprint: "Limited web footprint evidence",
   category_web_mismatch: "Business category conflicts with web results",
-  address_not_found: "Address not found externally",
+  address_not_found: "Address needs review",
   address_low_precision: "Address match is approximate",
   ml_anomalous_outlier: "Unusual vendor profile pattern",
   inconsistent_online_presence: "Online presence needs review",
@@ -39,11 +39,15 @@ const signalLabels: Record<string, string> = {
 const sourceLabels: Record<string, string> = {
   nlp: "Document text analysis",
   identity: "Identity validation",
-  agentic_verification: "External verification",
+  agentic_verification: "AI verification",
+  cac_registry: "Business registration",
+  cac_registry_fallback: "Business registration",
   anomaly_ml: "Behaviour model",
   anomaly: "Behaviour model",
   ocr: "Document extraction",
 };
+
+const technicalDetailPattern = /(external call failure|unable to confirm vendor registration|external|unavailable|provider|registry|scrape|fallback|client error|server error|bad request|unauthorized|forbidden|not found|\b(?:400|401|403|404)\b)/i;
 
 function humanize(value: string) {
   return value
@@ -58,6 +62,15 @@ function signalLabel(flag: Flag) {
 
 function sourceLabel(value: string) {
   return sourceLabels[value.toLowerCase()] || humanize(value);
+}
+
+function cleanSignalDetail(flag: Flag) {
+  if (technicalDetailPattern.test(flag.detail)) {
+    return flag.severity === "critical" || flag.severity === "high"
+      ? "This signal needs compliance review."
+      : "This signal was recorded for review.";
+  }
+  return flag.detail;
 }
 
 export function FlagList({ flags, loading }: FlagListProps) {
@@ -125,11 +138,9 @@ export function FlagList({ flags, loading }: FlagListProps) {
                   <span className="text-[11px] font-bold uppercase text-[#0B3142]">{flag.severity}</span>
                   <span className="text-[13px] font-semibold text-[#0B3142]">{signalLabel(flag)}</span>
                 </div>
-                <p className="mt-1 text-[13px] text-[#4A6B7C]">{flag.detail}</p>
-                <p className="mt-2 text-[11px] text-[#8FA3AF]">
-                  Source: {sourceLabel(flag.source_doc)} · check: {humanize(flag.check_method)}
-                </p>
-                {flag.evidence ? (
+                <p className="mt-1 text-[13px] text-[#4A6B7C]">{cleanSignalDetail(flag)}</p>
+                <p className="mt-2 text-[11px] text-[#8FA3AF]">Source: {sourceLabel(flag.source_doc)}</p>
+                {flag.evidence && !technicalDetailPattern.test(flag.evidence) ? (
                   <p className="mt-2 inline-block rounded-md bg-[#F2F4F6] px-2 py-1 font-mono text-[12px] text-[#0B3142]">
                     {flag.evidence}
                   </p>

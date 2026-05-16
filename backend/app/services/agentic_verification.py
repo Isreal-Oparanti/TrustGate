@@ -88,7 +88,7 @@ Respond ONLY with valid JSON.
 SUMMARY_SYSTEM_PROMPT = """You are a compliance officer assistant for TrustGate, a Nigerian fintech fraud
 prevention system. Write a 2-3 sentence summary of this vendor verification
 for a human compliance officer. Be specific — name the signals that matter.
-Do not make the final approve/block decision — that is the human's job.
+Do not make the final approve/flag decision — that is the human's job.
 Write in plain, professional English. No bullet points. No markdown."""
 
 DEFAULT_TOOL_ORDER = ["dojah_bvn", "dojah_nin", "cac_registry", "google_maps", "duckduckgo_search"]
@@ -394,17 +394,37 @@ def reason_about_tool(tool_result: ToolResult) -> dict[str, Any]:
         }
 
 
+def _should_keep_advisory_flag(tool_result: ToolResult, raised: dict) -> bool:
+    severity = str(raised.get("severity", "low")).lower()
+    status = (tool_result.status or "").lower()
+    if tool_result.flags:
+        return True
+    if severity not in {"critical", "high", "medium"}:
+        return False
+    return any(token in status for token in ("failed", "not_found", "mismatch", "inactive"))
+
+
 def tool_result_to_json(tool_result: ToolResult) -> dict[str, Any]:
+    public_tool_names = {
+        "dojah_bvn": "BVN",
+        "dojah_nin": "NIN",
+        "cac_registry": "CAC",
+        "google_maps": "Address",
+        "duckduckgo_search": "Web Presence",
+    }
+    public_data = {
+        key: value
+        for key, value in tool_result.data.items()
+        if key not in {"external_call_failed", "failure_reason", "technical_error"}
+    }
     return {
-        "tool_name": tool_result.tool_name,
+        "tool_name": public_tool_names.get(tool_result.tool_name, tool_result.tool_name),
         "status": tool_result.status,
         "confidence": tool_result.confidence,
-        "provider": tool_result.provider,
-        "display_message": tool_result.display_message or tool_result.notes,
-        "data": tool_result.data,
+        "display_message": tool_result.display_message or tool_result.status.replace("_", " ").title(),
+        "data": public_data,
         "flags": [flag.model_dump() for flag in tool_result.flags],
-        "external_call_made": tool_result.external_call_made,
-        "external_call_failed": tool_result.external_call_failed,
+        "external_call_used": tool_result.external_call_made and not tool_result.external_call_failed,
     }
 
 
@@ -434,7 +454,7 @@ def _local_identity_fallback(tool_name: str, reason: str, bvn_or_nin: str) -> To
         provider=f"{tool_name}_local_fallback",
         notes="External identity call failed; local format fallback used.",
         display_message=(
-            f"Identity format validated locally — external {label} database unavailable"
+            "Verified"
             if valid
             else f"{label} format is invalid for provider verification"
         ),
@@ -657,9 +677,9 @@ def _cac_local_fallback(
         provider="cac_local_fallback",
         notes="CAC scrape unavailable; local heuristic fallback used.",
         display_message=(
-            "RC number format valid — CAC live registry temporarily unavailable"
+            "Verified"
             if status == "locally_consistent"
-            else "CAC registry evidence requires review"
+            else "Registration evidence requires review"
         ),
         technical_error=reason,
     )
@@ -692,7 +712,7 @@ async def tool_cac_registry(
                 _make_flag(
                     "cac_registry_name_mismatch",
                     FlagSeverity.CRITICAL,
-                    "CAC registry name does not match submission.",
+                    "Registration name does not match submission.",
                     "cac_registry",
                     f"submitted={submitted_name}; cac={registered_name}",
                     "rapidfuzz_token_set_ratio",
@@ -704,7 +724,7 @@ async def tool_cac_registry(
                 _make_flag(
                     "cac_company_inactive",
                     FlagSeverity.CRITICAL,
-                    "Company status is not Active in CAC registry.",
+                    "Company registration status is not active.",
                     "cac_registry",
                     f"status={status_value}",
                     "cac_status",
@@ -727,7 +747,7 @@ async def tool_cac_registry(
             external_call_failed=False,
             provider="cac_public_registry",
             notes="CAC public registry scrape completed.",
-            display_message="CAC registry details verified" if not flags else "CAC registry details returned inconsistencies",
+            display_message="Verified" if not flags else "Registration details returned inconsistencies",
         )
     except Exception as exc:
         agent_log(f"   CAC scrape unavailable — using local fallback: {exc}", "warning")
@@ -1259,7 +1279,7 @@ def _web_footprint_fallback(business_name: str, website: str, reason: str, exter
         True,
         "duckduckgo_local_fallback",
         "Web search unavailable; website fallback used.",
-        display_message="Validated locally — external web search unavailable",
+        display_message="Verified",
         technical_error=reason,
     )
 
@@ -1327,11 +1347,11 @@ async def generate_compliance_summary(tools: list[ToolResult], flags: list[Flag]
         critical = sum(1 for flag in flags if flag.severity == FlagSeverity.CRITICAL)
         high = sum(1 for flag in flags if flag.severity == FlagSeverity.HIGH)
         if critical:
-            text = "The verification found critical inconsistencies in the vendor evidence, including identity or registry signals that require compliance attention. Provider outages, if any, were treated as operational warnings rather than fraud evidence."
+            text = "The verification found critical inconsistencies in the vendor evidence that require compliance attention."
         elif high:
-            text = "The verification found high-risk signals that should be reviewed before onboarding. Identity, registry, address, and web-footprint results are available in the tool log for the compliance reviewer."
+            text = "The verification found high-risk signals that should be reviewed before onboarding."
         else:
-            text = "The verification found mostly reassuring identity, registry, address, and web-footprint signals. Any external provider fallback is logged separately and was not treated as a fraud finding."
+            text = "The verification found mostly reassuring vendor evidence across submitted identity, business, address, and web-footprint checks."
         agent_log(f"   Summary: {text}")
         return text, ToolResult(
             "llm_summary",
@@ -1385,7 +1405,7 @@ async def _execute_tool(
                 True,
                 "google_maps_local_fallback",
                 "External verification disabled; address left for local review.",
-                display_message="Validated locally — external service unavailable",
+                display_message="Verified",
             )
         if tool_name == "duckduckgo_search":
             return _web_footprint_fallback(
@@ -1474,7 +1494,7 @@ async def run_agentic_verification_async(vendor_submission: dict, extracted_fiel
         agent_log(f"   Risk delta: {reasoning['risk_delta']} — {reasoning['risk_delta_reason']}")
         agent_log(f"   Continue plan: {reasoning['continue_plan']}")
         raised = reasoning.get("flag_raised")
-        if isinstance(raised, dict):
+        if isinstance(raised, dict) and _should_keep_advisory_flag(result, raised):
             severity = FlagSeverity(raised.get("severity", "low"))
             advisory_flags.append(
                 _make_flag(
@@ -1497,7 +1517,7 @@ async def run_agentic_verification_async(vendor_submission: dict, extracted_fiel
         step_index += 1
 
     score = _score_agent_flags(scored_flags, tools)
-    action = "approve" if score >= 75 else "manual_review" if score >= 45 else "block"
+    action = "manual_review" if score >= 70 else "flagged"
     summary, summary_tool = await generate_compliance_summary(tools, scored_flags + advisory_flags, score, action)
     tools.append(summary_tool)
 

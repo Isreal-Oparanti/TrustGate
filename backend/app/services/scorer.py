@@ -62,11 +62,11 @@ def _score_bucket(flags: list[dict], *, cap: int) -> int:
 def _risk_and_verdict(score: int, flags: list[dict]) -> tuple[str, str]:
     critical_count = sum(1 for flag in flags if _legacy_flag_severity(flag) >= 4)
     high_count = sum(1 for flag in flags if _legacy_flag_severity(flag) == 3)
-    if score >= 75 and critical_count == 0:
-        return "LOW", "approved"
-    if score >= 50 and critical_count < 2 and high_count < 4:
+    if score >= 70 and critical_count == 0:
+        return "LOW", "review"
+    if score >= 70 and critical_count < 2 and high_count < 4:
         return "MEDIUM", "review"
-    return "HIGH", "blocked"
+    return "HIGH", "flagged"
 
 
 def calculate_score_breakdown(
@@ -102,6 +102,10 @@ def calculate_score_breakdown(
         score = min(score, 35)
     if sum(1 for flag in flags if _legacy_flag_severity(flag) >= 4) >= 2:
         score = min(score, 48)
+    elif any(str(flag.get("code", "")).lower() == "business_bvn_pattern_mismatch" for flag in flags):
+        score = min(score, 62)
+    elif sum(1 for flag in flags if _legacy_flag_severity(flag) == 3) >= 2:
+        score = min(score, 68)
 
     risk_level, verdict = _risk_and_verdict(score, flags)
     return score, risk_level, verdict, {
@@ -131,7 +135,11 @@ def _external_check_status(tool) -> str:
     if flag_count > 0:
         return "failed"
     if tool.external_call_failed:
-        return "fallback"
+        locally_valid = (
+            status in {"fallback_format_valid", "locally_consistent"}
+            or evidence.get("valid_format") is True
+        )
+        return "confirmed" if locally_valid else "fallback"
     if "failed" in status or "not_found" in status or "mismatch" in status:
         return "failed" if tool.confidence < 0.45 else "fallback"
     if "fallback" in status or "fallback" in provider or "local" in status or "local" in provider:
@@ -143,7 +151,7 @@ def _tool_label(tool_name: str) -> str:
     return {
         "dojah_bvn": "BVN",
         "dojah_nin": "NIN",
-        "cac_registry": "CAC Registry",
+        "cac_registry": "CAC",
         "google_maps": "Address",
         "duckduckgo_search": "Web Presence",
     }.get(tool_name, tool_name.replace("_", " ").title())
@@ -153,11 +161,54 @@ def _clean_external_detail(value: str, fallback: str) -> str:
     detail = (value or "").strip()
     if not detail:
         return fallback
-    if any(token in detail.lower() for token in ("http://", "https://", "client error", "server error", "bad request")):
+    if any(
+        token in detail.lower()
+        for token in (
+            "http://",
+            "https://",
+            "client error",
+            "server error",
+            "external call failure",
+            "unable to confirm vendor registration",
+            "bad request",
+            "unauthorized",
+            "forbidden",
+            "not found",
+            "external",
+            "unavailable",
+            "provider",
+            "registry",
+            "scrape",
+            "fallback",
+        )
+    ):
         return fallback
     if any(code in detail for code in ("400", "401", "403", "404")):
         return fallback
     return detail
+
+
+def _clean_summary(value: str, fallback: str) -> str:
+    summary = (value or "").strip()
+    if not summary:
+        return fallback
+    blocked_tokens = (
+        "client error",
+        "server error",
+        "external call failure",
+        "unable to confirm vendor registration",
+        "external call",
+        "external search",
+        "external verification",
+        "external service",
+        "registry check",
+        "live registry",
+        "registry failure",
+        "provider outage",
+        "provider fallback",
+        "unavailable",
+    )
+    return fallback if any(token in summary.lower() for token in blocked_tokens) else summary
 
 
 def _external_checks(agent_result) -> list[dict]:
@@ -168,15 +219,17 @@ def _external_checks(agent_result) -> list[dict]:
         evidence = tool.evidence or {}
         status = _external_check_status(tool)
         fallback_detail = (
-            "Validated locally — external service unavailable"
+            "Verified"
+            if status == "confirmed" and tool.external_call_failed
+            else "Needs review"
             if status == "fallback"
-            else "External verification requires review"
+            else "Needs review"
         )
         detail = _clean_external_detail(tool.display_message or tool.notes or tool.status.replace("_", " ").title(), fallback_detail)
         safe_evidence = {
             key: value
             for key, value in evidence.items()
-            if key not in {"failure_reason", "technical_error"}
+            if key not in {"failure_reason", "technical_error", "external_call_failed"}
         }
         checks.append(
             {
@@ -187,11 +240,8 @@ def _external_checks(agent_result) -> list[dict]:
                 "raw": {
                     "status": tool.status,
                     "confidence": tool.confidence,
-                    "provider": tool.provider,
-                    "external_call_failed": tool.external_call_failed,
                     "display_message": detail,
                     "evidence": safe_evidence,
-                    "notes": tool.notes,
                 },
             }
         )
@@ -203,7 +253,7 @@ def recommendation_for(verdict: str) -> str:
         return "Approve merchant onboarding and continue normal monitoring."
     if verdict == "review":
         return "Manual compliance review required before Squad merchant creation."
-    return "Block onboarding until identity and business evidence are resolved."
+    return "Flag onboarding until identity and business evidence are resolved."
 
 
 def _doc_type_from_filename(file_name: str) -> str | None:
@@ -376,10 +426,11 @@ async def run_verification(db, vendor: Vendor) -> Verification:
     )
     dominant_flags = sorted(all_flags, key=lambda item: item.get("severity", 0), reverse=True)[:3]
     dominant_summary = ", ".join(flag["title"] for flag in dominant_flags) or "No material flags"
-    summary = agent_result.explanation or (
+    fallback_summary = (
         f"Trust score {score}/100. Risk level {risk_level}. Verdict: {verdict}. "
         f"Dominant signals: {dominant_summary}."
     )
+    summary = _clean_summary(agent_result.explanation, fallback_summary)
 
     verification = Verification(
         id=str(uuid.uuid4()),
@@ -395,7 +446,7 @@ async def run_verification(db, vendor: Vendor) -> Verification:
         ocr_text=extracted_text or None,
         nlp_notes=nlp_notes,
         identity_status=identity_status,
-        anomaly_notes=f"{anomaly_notes} Agent score={agent_result.agent_score}. {agent_result.explanation}",
+        anomaly_notes=f"{anomaly_notes} Agent score={agent_result.agent_score}. {summary}",
         external_checks=_external_checks(agent_result),
         processing_time_ms=int((time.perf_counter() - started) * 1000),
     )

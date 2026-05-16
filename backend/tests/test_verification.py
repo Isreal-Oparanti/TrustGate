@@ -39,4 +39,4 @@ def test_vendor_can_be_created_and_verified():
     body = verify_response.json()
     assert body["verification"]["vendor_id"] == vendor_id
     assert 0 <= body["verification"]["trust_score"] <= 100
-    assert body["verification"]["verdict"] in {"approved", "review", "blocked"}
+    assert body["verification"]["verdict"] in {"review", "flagged", "blocked"}
