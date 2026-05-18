@@ -47,7 +47,6 @@ def validate_vendor_fields(payload: VendorCreate) -> list[str]:
     bvn_status = "✓"
     nin_status = "✓"
     phone_status = "✓"
-    email_status = "✓"
     rc_status = "✓"
 
     if payload.bvn and not re.match(r"^\d{11}$", payload.bvn):
@@ -76,13 +75,6 @@ def validate_vendor_fields(payload: VendorCreate) -> list[str]:
     if settlement_bank_code not in {"058", "000013"} and "gtbank" not in settlement_bank and "guaranty trust" not in settlement_bank:
         errors.append("Wallet-compatible settlement bank must be GTBank")
 
-    if tier in ["tier2", "tier3"] and payload.email:
-        free_domains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com"]
-        domain = str(payload.email).split("@")[-1].lower()
-        if domain in free_domains:
-            errors.append("Business accounts should use a corporate email address")
-            email_status = "⚠ free_domain"
-
     if tier == "tier3" and not (payload.rc_number or "").strip():
         errors.append("RC number is required for Tier 3 vendors")
         rc_status = "✗"
@@ -92,11 +84,10 @@ def validate_vendor_fields(payload: VendorCreate) -> list[str]:
             rc_status = "✗"
 
     logger.info(
-        "→ Validating vendor fields: BVN=%s NIN=%s Phone=%s Email=%s RC=%s",
+        "→ Validating vendor fields: BVN=%s NIN=%s Phone=%s RC=%s",
         bvn_status,
         nin_status,
         phone_status,
-        email_status,
         rc_status,
     )
     return errors

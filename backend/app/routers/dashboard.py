@@ -12,6 +12,21 @@ from app.schemas.vendor import VendorOut
 router = APIRouter()
 
 
+def _attach_latest_verification(vendor: Vendor, db: Session) -> Vendor:
+    latest = (
+        db.query(Verification)
+        .filter(Verification.vendor_id == vendor.id)
+        .order_by(Verification.created_at.desc())
+        .first()
+    )
+    score = latest.trust_score if latest else None
+    setattr(vendor, "trust_score", score)
+    setattr(vendor, "verification_score", score)
+    if latest and vendor.status in {"pending", "review", "flagged", "blocked"}:
+        vendor.status = latest.verdict
+    return vendor
+
+
 @router.get("/stats", response_model=DashboardStats)
 def get_stats(db: Session = Depends(get_db)):
     today = dt.datetime.utcnow().date()
@@ -44,7 +59,7 @@ def get_queue(db: Session = Depends(get_db)):
         .limit(50)
         .all()
     )
-    return vendors
+    return [_attach_latest_verification(vendor, db) for vendor in vendors]
 
 
 @router.get("/recent", response_model=list[dict])

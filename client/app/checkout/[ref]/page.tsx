@@ -31,10 +31,10 @@ export default function MockCheckoutPage({ params }: { params: { ref: string } }
         </div>
 
         <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <Link href="/dashboard/operations">
+          <Link href="/operations">
             <Button>Back to Operations</Button>
           </Link>
-          <Link href="/dashboard/transactions">
+          <Link href="/transactions">
             <Button variant="secondary">View Transactions</Button>
           </Link>
         </div>

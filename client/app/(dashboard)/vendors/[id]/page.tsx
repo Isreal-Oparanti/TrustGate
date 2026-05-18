@@ -91,6 +91,8 @@ function buildExternalChecks(vendor: VendorListItem, checks?: ExternalCheck[]): 
 }
 
 const TECHNICAL_ERROR_PATTERN = /(https?:\/\/|client error|server error|external call failure|unable to confirm vendor registration|bad request|unauthorized|forbidden|not found|external|unavailable|provider|registry|scrape|fallback|\b(?:400|401|403|404)\b)/i;
+const SUMMARY_TECHNICAL_ERROR_PATTERN =
+  /client error|server error|external call failure|bad request|unauthorized|forbidden|provider outage|\b(?:400|401|403|404)\b/i;
 
 function cleanExternalDetail(check: ExternalCheck): string {
   const rawMessage = typeof check.raw?.display_message === "string" ? check.raw.display_message : check.detail;
@@ -107,7 +109,7 @@ function cleanExternalDetail(check: ExternalCheck): string {
 function cleanSummary(value?: string): string {
   const fallback =
     "Vendor documents are internally consistent based on the latest available checks. Review the signal list before a final compliance decision.";
-  if (!value || TECHNICAL_ERROR_PATTERN.test(value) || /external call|external search|registry check|live registry|provider outage/i.test(value)) {
+  if (!value || SUMMARY_TECHNICAL_ERROR_PATTERN.test(value)) {
     return fallback;
   }
   return value;
@@ -209,6 +211,8 @@ export default function VendorDetailPage() {
   const verificationNotStarted = verification?.status === "not_started";
   const score = typeof verification?.trust_score === "number" ? verification.trust_score : vendor ? vendorScore(vendor) : 0;
   const summary = cleanSummary(verification?.ai_summary);
+  const isApproved = vendor?.status === "approved";
+  const approving = actionLoading === "approved";
   const checks = useMemo(
     () => (vendor ? buildExternalChecks(vendor, verification?.external_checks) : []),
     [vendor, verification?.external_checks],
@@ -314,23 +318,14 @@ export default function VendorDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {vendor.status !== "approved" ? (
-            <Button
-              variant="success"
-              loading={actionLoading === "approved"}
-              leftIcon={<CheckCircle className="h-4 w-4" />}
-              onClick={() => void updateStatus("approved")}
-            >
-              Approve
-            </Button>
-          ) : null}
           <Button
-            variant="danger"
-            loading={actionLoading === "flagged"}
-            leftIcon={<XCircle className="h-4 w-4" />}
-            onClick={() => void updateStatus("flagged")}
+            variant="success"
+            loading={approving}
+            disabled={isApproved}
+            leftIcon={<CheckCircle className="h-4 w-4" />}
+            onClick={() => void updateStatus("approved")}
           >
-            Flag
+            {approving ? "Approving..." : isApproved ? "Approved" : "Approve"}
           </Button>
         </div>
       </div>
@@ -422,16 +417,15 @@ export default function VendorDetailPage() {
           >
             Run Verification Again
           </Button>
-          {vendor.status !== "approved" ? (
-            <Button
-              variant="success"
-              loading={actionLoading === "approved"}
-              leftIcon={<CheckCircle className="h-4 w-4" />}
-              onClick={() => void updateStatus("approved")}
-            >
-              Approve Vendor
-            </Button>
-          ) : null}
+          <Button
+            variant="success"
+            loading={approving}
+            disabled={isApproved}
+            leftIcon={<CheckCircle className="h-4 w-4" />}
+            onClick={() => void updateStatus("approved")}
+          >
+            {approving ? "Approving..." : isApproved ? "Approved Vendor" : "Approve Vendor"}
+          </Button>
           {/* <Button
             variant="warning"
             loading={actionLoading === "review"}
@@ -440,14 +434,14 @@ export default function VendorDetailPage() {
           >
             Send to Review
           </Button> */}
-          <Button
+          {/* <Button
             variant="danger"
             loading={actionLoading === "flagged"}
             leftIcon={<XCircle className="h-4 w-4" />}
             onClick={() => void updateStatus("flagged")}
           >
             Flag Vendor
-          </Button>
+          </Button> */}
         </div>
       </div>
     </div>

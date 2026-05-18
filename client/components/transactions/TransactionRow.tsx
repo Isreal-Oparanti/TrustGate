@@ -39,7 +39,7 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
               <AlertTriangle className="mr-1 h-3 w-3" />
               {transaction.flag_type || "Velocity spike"}
             </Badge>
-            <Button size="sm" variant="secondary" onClick={() => router.push(`/dashboard/vendors/${transaction.merchant_id}`)}>
+            <Button size="sm" variant="secondary" onClick={() => router.push(`/vendors/${transaction.merchant_id}`)}>
               Review
             </Button>
           </>

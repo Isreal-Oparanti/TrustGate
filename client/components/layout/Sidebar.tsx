@@ -13,9 +13,9 @@ import { cn } from "@/lib/utils";
 
 const primaryNav = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Vendors", href: "/dashboard/vendors", icon: Users },
-  { label: "Transactions", href: "/dashboard/transactions", icon: ArrowLeftRight },
-  { label: "Operations", href: "/dashboard/operations", icon: ShieldCheck },
+  { label: "Vendors", href: "/vendors", icon: Users },
+  { label: "Operations", href: "/operations", icon: ShieldCheck },
+  { label: "Transactions", href: "/transactions", icon: ArrowLeftRight },
 ];
 
 const systemNav = [

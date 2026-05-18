@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
+
+const appRoutes = ["/dashboard", "/vendors", "/transactions", "/operations"];
 
 function getDashboardLink(element: Element | null): HTMLAnchorElement | null {
   const anchor = element?.closest("a");
@@ -14,12 +16,11 @@ function getDashboardLink(element: Element | null): HTMLAnchorElement | null {
   }
 
   const url = new URL(anchor.href, window.location.href);
-  return url.origin === window.location.origin && url.pathname.startsWith("/dashboard") ? anchor : null;
+  return url.origin === window.location.origin && appRoutes.some((route) => url.pathname === route || url.pathname.startsWith(`${route}/`)) ? anchor : null;
 }
 
 export function RouteLoadingIndicator() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [pending, setPending] = useState(false);
   const timeoutRef = useRef<number | null>(null);
 
@@ -51,7 +52,7 @@ export function RouteLoadingIndicator() {
   useEffect(() => {
     setPending(false);
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   if (!pending) return null;
 

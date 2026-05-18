@@ -101,7 +101,7 @@ export function VendorQueue() {
           <Badge variant="pending">{vendors.length}</Badge>
         </div>
         <Link
-          href="/dashboard/vendors"
+          href="/vendors"
           className="inline-flex items-center gap-1 text-[13px] font-medium text-[#E51E56]"
         >
           View all <ChevronRight className="h-4 w-4" />
@@ -123,7 +123,7 @@ export function VendorQueue() {
                 key={vendor.id}
                 type="button"
                 className="grid w-full grid-cols-[36px_1fr_auto] gap-3 rounded-xl border border-transparent p-3 text-left transition-colors hover:border-[#E5E9ED] hover:bg-[#F8F9FA]"
-                onClick={() => router.push(`/dashboard/vendors/${vendor.id}`)}
+                onClick={() => router.push(`/vendors/${vendor.id}`)}
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E8EEF2] text-[12px] font-semibold text-[#0B3142]">
                   {initials(vendor.business_name)}
