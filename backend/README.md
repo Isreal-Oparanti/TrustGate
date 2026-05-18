@@ -1,406 +1,367 @@
 # TrustGate Backend
 
-TrustGate is a FastAPI platform layer for onboarding vendors under one Squad business, giving each vendor payment collection, transfer, and virtual wallet capabilities.
+The TrustGate backend is a FastAPI service for merchant onboarding, AI-assisted verification, Squad payment integration, wallet/transfer operations, and behavioural transaction monitoring.
 
-The current backend is intentionally a hybrid AI system, not a fake "massive trained fraud model." It combines deterministic verification, classical NLP, lightweight ML, anomaly detection, and explainable risk scoring. External BVN/CAC/paid checks are not called by default.
+It is built for the Squad Hackathon 3.0 **Proof of Life** challenge. The backend focuses on a real financial-services trust problem: merchants can appear legitimate during onboarding but become risky after they start receiving payments.
 
-## Quick Start
+## Backend Responsibilities
 
-From Git Bash:
+The backend handles:
+
+- vendor registration and login,
+- document upload and storage,
+- OCR/NLP document processing,
+- identity and business consistency checks,
+- agentic verification and compliance summaries,
+- trust score calculation,
+- vendor approval/review/flagging,
+- Squad merchant/payment/wallet/transfer integration,
+- webhook ingestion,
+- behavioural transaction monitoring,
+- dashboard metrics and review queue data.
+
+## Tech Stack
+
+- FastAPI
+- SQLAlchemy
+- SQLite by default
+- Pydantic schemas
+- PyMuPDF / Tesseract hooks for OCR
+- RapidFuzz for text similarity
+- scikit-learn for anomaly scoring
+- HTTPX for external/provider-style calls
+- Squad API wrapper with mock mode
+
+
+## Local Setup
+
+From `backend/`:
 
 ```bash
-cd backend
 python -m venv .venv
-. .venv/Scripts/activate
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-From PowerShell:
+Windows PowerShell:
 
 ```powershell
-cd C:\Users\USER\Desktop\TrustGate\backend
+cd backend
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Python 3.13 users should use the current `requirements.txt` ranges so pip can choose compatible wheels.
+Backend URL:
 
-Open:
+```text
+http://127.0.0.1:8000
+```
 
-- API health: http://127.0.0.1:8000/health
-- Swagger docs: http://127.0.0.1:8000/docs
+Useful URLs:
 
-## Database
+- `GET /health`
+- `GET /docs`
+- `GET /uploads/<vendor-folder>/<filename>` for demo-uploaded files
 
-The default database is SQLite:
+## Environment Variables
+
+The backend works in local/mock mode by default. Add a `.env` file in `backend/` for custom configuration.
 
 ```env
+APP_NAME=TrustGate API
+APP_ENV=development
 DATABASE_URL=sqlite:///./trustgate.db
-```
 
-To use Postgres, change `DATABASE_URL` in `.env`, for example:
-
-```env
-DATABASE_URL=postgresql://user:password@localhost:5432/trustgate
-```
-
-The app creates tables automatically on startup for the demo flow.
-
-## AI/ML Positioning
-
-TrustGate does not use an LLM to make fraud decisions. That is deliberate.
-
-Current decisioning is based on:
-
-- deterministic checks for structured facts like RC numbers, NIN/BVN format, addresses, and document completeness,
-- classical NLP for entity extraction and document consistency,
-- lightweight supervised ML with Naive Bayes for document-language authenticity,
-- unsupervised ML with Isolation Forest for onboarding anomaly prioritization,
-- explainable weighted trust scoring.
-
-Where an LLM can help later:
-
-- generate compliance-officer explanations,
-- summarize ambiguous risk signals,
-- convert technical flags into plain language,
-- assist human review.
-
-Where an LLM should not be used:
-
-- final fraud decisioning,
-- deterministic compliance validation,
-- BVN/CAC/TIN verification,
-- mathematical trust-score calculation.
-
-The honest product framing is:
-
-```text
-TrustGate uses a hybrid intelligence architecture combining deterministic verification,
-heuristic risk scoring, lightweight NLP analysis, and anomaly detection. The system is
-designed to evolve into a supervised ML fraud pipeline as labeled merchant outcomes,
-chargebacks, compliance reviews, and transaction history accumulate.
-```
-
-## NLP Pipeline Implementation
-
-The NLP engine lives in `app/services/nlp.py`. It replaces the earlier simple consistency checker with a full local document-language pipeline for TrustGate.
-
-What was added:
-
-- OCR text extraction and Unicode/whitespace normalization.
-- NLTK-based tokenization, stopword removal, POS tagging, and safe stemming that avoids Nigerian proper names and structured codes.
-- TF-IDF vectorization for document comparison.
-- spaCy `en_core_web_sm` NER for organizations, people, places, dates, money, and numbers, with regex fallback if the model is unavailable.
-- Nigerian business-document regex extraction for RC, BVN/NIN-like numbers, TIN, NGN amounts, phone numbers, dates, addresses, company names, and director names.
-- Multi-method consistency checks:
-  - cosine/TF-IDF for document text features,
-  - RapidFuzz token-set ratio for names and addresses,
-  - normalized exact match for RC numbers and other structured codes.
-- Nigerian name-order handling, so `Folake Adeniyi` can match `Adeniyi Folake Blessing`.
-- Linguistic anomaly detection for template text, fraud phrases, copy-paste signatures, numeric anomalies, and OCR confidence.
-- Naive Bayes document-authenticity classifier using `MultinomialNB(alpha=1.0)` with explicit Laplacian smoothing logs.
-- Structured `NLPResult`, `Flag`, `FlagSeverity`, and `ClassifierResult` schemas in `app/schemas/verification.py`.
-- Production-style logs to stdout and `logs/nlp_pipeline.log`.
-
-The old backend scorer still works because `check_consistency()` remains as a compatibility adapter. The full new entry point is:
-
-```python
-from app.services.nlp import run_nlp_pipeline
-```
-
-## Agentic Verification Layer
-
-The backend now includes `app/services/agentic_verification.py`.
-
-This is not traditional RAG. It is a local-first fact-check agent that takes structured facts from NLP and decides which verification tools should check each fact type.
-
-Current local tools:
-
-- `cac_registry_lookup`: checks submitted RC/business name against extracted document facts.
-- `identity_verification`: checks BVN/NIN format, placeholder numeric patterns, and director-name agreement.
-- `address_geocoder`: checks address specificity and document-address agreement.
-- `web_footprint_check`: checks whether the vendor submitted a website or business email domain.
-- `local_template_explainer`: produces compliance-friendly explanation text without calling an LLM.
-
-Important: these tools do not call CAC, Dojah, Prembly, Google Maps, Google Search, or OpenAI. They are local heuristics designed around provider interfaces. Every result says whether an external call was used.
-
-The agent returns:
-
-- `agent_score`,
-- tool-level results,
-- explainable flags,
-- external services used,
-- recommended action,
-- compliance-friendly explanation.
-
-The main verification flow now calls this agent and stores its flags alongside NLP, identity, and anomaly flags.
-
-Run the standalone agent demo:
-
-```bash
-python test_agentic_verification_demo.py
-```
-
-Expected high-level output:
-
-```text
-CLEAN LOCAL AGENT CHECK
-AGENT SCORE: 100/100
-RECOMMENDED ACTION: approve
-EXTERNAL SERVICES USED: []
-
-FRAUD LOCAL AGENT CHECK
-AGENT SCORE: 35/100
-RECOMMENDED ACTION: block
-EXTERNAL SERVICES USED: []
-```
-
-## External Service Policy
-
-External services are disabled by default:
-
-```env
-EXTERNAL_VERIFICATION_ENABLED=false
-IDENTITY_PROVIDER=local
-CAC_PROVIDER=local
-LLM_EXPLANATION_PROVIDER=local_template
-DOJAH_API_KEY=
-PREMBLY_API_KEY=
-OPENAI_API_KEY=
-```
-
-This means:
-
-- no paid BVN/NIN lookup is called,
-- no CAC provider is called,
-- no Google Maps/Search provider is called,
-- no LLM provider is called.
-
-Production-ready integration points are present conceptually, but real provider calls should only be enabled after choosing a provider, adding credentials, and deciding what data is safe to send externally.
-
-Good future providers:
-
-- Dojah or Prembly for BVN/NIN checks,
-- Prembly/CAC-style provider for CAC lookup,
-- FIRS/public TIN lookup where available,
-- Google Maps or HERE for address geocoding,
-- Google Custom Search or SerpAPI for web footprint checks,
-- OpenAI or another LLM provider only for explanation generation.
-
-## Anomaly Detection Engine
-
-`app/services/anomaly.py` now has two layers:
-
-- deterministic heuristics for free email domains, weak phone numbers, and suspicious placeholder business names,
-- an Isolation Forest model from scikit-learn for onboarding-profile outlier detection.
-
-The Isolation Forest currently trains on a small synthetic merchant baseline. This is correct for a hackathon MVP because real fraud labels are not available yet. In production, the baseline should be replaced with historical merchant onboarding, compliance outcomes, chargebacks, disputes, and transaction behavior.
-
-What to say if asked about training data:
-
-```text
-At MVP stage, we use rules-assisted and semi-supervised risk prioritization.
-The architecture is ready for supervised fraud classification once historical
-merchant outcomes and compliance review labels accumulate.
-```
-
-Do not claim production fraud accuracy from the synthetic baseline.
-
-## Trust Score Engine
-
-`app/services/scorer.py` now aggregates multiple intelligence sources:
-
-- identity checks,
-- NLP document consistency,
-- anomaly heuristics and Isolation Forest,
-- local agentic verification flags.
-
-The score is weighted by signal source and severity. The final verification summary includes dominant signals so the dashboard can explain why a vendor was approved, blocked, or sent to manual review.
-
-## NLP Setup
-
-Install Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Install NLTK assets:
-
-```bash
-python setup_nlp.py
-```
-
-Install the spaCy English model:
-
-```bash
-python -m spacy download en_core_web_sm
-```
-
-These have already been installed in the local `.venv` on this machine.
-
-## How To Check It Works
-
-Run the normal backend tests:
-
-```bash
-python -m pytest tests -q
-```
-
-Expected result:
-
-```text
-2 passed
-```
-
-Run the NLP demo:
-
-```bash
-python test_nlp_demo.py
-```
-
-Expected high-level output:
-
-```text
-TEST CASE 1: Clean vendor
-FINAL SCORE: 89/100
-FLAGS: 3 (0 critical)
-
-TEST CASE 2: Fraud vendor
-FINAL SCORE: 0/100
-FLAGS: 15
-SUMMARY: NLP reviewed 2 documents and found 9 critical fraud signal(s).
-```
-
-The full step-by-step NLP logs are written to:
-
-```text
-logs/nlp_pipeline.log
-```
-
-To confirm spaCy NER is installed:
-
-```bash
-python -c "import spacy; nlp=spacy.load('en_core_web_sm'); print(nlp.meta['name'], nlp.meta['version'])"
-```
-
-Expected result:
-
-```text
-core_web_sm 3.8.0
-```
-
-Run the local agent demo:
-
-```bash
-python test_agentic_verification_demo.py
-```
-
-Run the API verification flow manually:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Then visit:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-Use:
-
-1. `POST /api/v1/vendors/` to create a vendor.
-2. `POST /api/v1/verify/{vendor_id}` to run TrustGate scoring.
-3. `GET /api/v1/verify/{vendor_id}` to inspect the result.
-4. `GET /api/v1/verify/{vendor_id}/flags` to inspect individual flags.
-
-## Core Routes
-
-| Method | Path | What it does |
-| --- | --- | --- |
-| POST | `/api/vendors/` | Create a vendor under your platform as a Squad sub-merchant |
-| GET | `/api/vendors/me` | Get current vendor by `X-Vendor-Id` |
-| POST | `/api/wallets` | Create current vendor's Squad business virtual account |
-| GET | `/api/wallets/me` | Get current vendor's wallet |
-| GET | `/api/wallets/me/transactions` | Get current vendor wallet transactions |
-| POST | `/api/payments/initiate` | Create payment ref for the current vendor, require security answer, call Squad initiate, return checkout URL |
-| GET | `/api/payments/{transaction_ref}` | Verify and return current vendor's payment status |
-| GET | `/api/payments/` | List current vendor's local payment history, optionally filtered by `status` |
-| POST | `/api/webhooks/squad` | Validate Squad HMAC webhook, update payment status, run fraud monitoring |
-| POST | `/api/transfers/account-lookup` | Confirm a recipient account before transfer |
-| POST | `/api/transfers` | Send money from your Squad wallet to a bank account |
-| POST | `/api/transfers/requery` | Re-query a transfer status |
-
-## Squad Payments
-
-Create a vendor/sub-merchant first:
-
-```http
-POST /api/vendors/
-```
-
-```json
-{
-  "business_name": "Demo Vendor Ltd",
-  "rc_number": "RC-DEMO-001",
-  "bvn": "12345678901",
-  "nin": "10987654321",
-  "email": "demo.vendor@example.com",
-  "phone": "08012345678",
-  "address": "12 Marina Road, Lagos",
-  "settlement_account_name": "Demo Vendor Ltd",
-  "settlement_account_number": "0123456789",
-  "settlement_bank_code": "058",
-  "settlement_bank": "GTBank",
-  "payment_security_question": "What is your demo payment security answer?",
-  "payment_security_answer": "demo123"
-}
-```
-
-Payment API routes require the current vendor header:
-
-```http
-X-Vendor-Id: vendor_id_returned_from_sub_merchant_creation
-```
-
-Example initiate payload:
-
-```json
-{
-  "amount": 250000,
-  "customer_email": "customer@example.com",
-  "customer_name": "Ada Lovelace",
-  "security_answer": "your_dev_answer",
-  "currency": "NGN",
-  "callback_url": "http://localhost:3000/",
-  "payment_channels": ["card", "bank", "ussd", "transfer"],
-  "metadata": {
-    "order_id": "ORD-1001"
-  },
-  "pass_charge": false
-}
-```
-
-Set these environment values when leaving mock mode:
-
-```env
-SQUAD_MOCK_MODE=false
-SQUAD_SECRET_KEY=sandbox_sk_or_live_sk
+SQUAD_MOCK_MODE=true
 SQUAD_API_BASE_URL=https://sandbox-api-d.squadco.com
-SQUAD_PARENT_BUSINESS_ID=SBHDTWL6SR
-PAYMENT_CALLBACK_URL=https://your-client.example/payments/callback
-PAYMENT_SECURITY_QUESTION=Your configured security question
-PAYMENT_SECURITY_ANSWER_HASH=sha256_hex_of_the_expected_answer
+SQUAD_SECRET_KEY=
+SQUAD_PARENT_BUSINESS_ID=
+PAYMENT_CALLBACK_URL=http://localhost:3000/vendor
+
+EXTERNAL_VERIFICATION_ENABLED=false
+OPENAI_API_KEY=
+DOJAH_APP_ID=
+DOJAH_API_KEY=
+GOOGLE_MAPS_API_KEY=
+GOOGLE_API_KEY=
+GOOGLE_CX=
 ```
 
-`PAYMENT_SECURITY_ANSWER` is also supported for local development, but prefer the hash in shared environments.
+### Important Policy
 
-## Test
+External provider failures must not be exposed to frontend users. Provider outages are operational metadata, not fraud evidence. The backend sanitizes public verification details so users see neutral review/verification language instead of registry/provider failure messages.
+
+## Database Models
+
+Main models:
+
+- `Vendor` - merchant profile, business identity, settlement details, Squad merchant IDs.
+- `Document` - uploaded documents and metadata.
+- `Verification` - latest trust score, score breakdown, verdict, summary, external check cards.
+- `Flag` - saved risk/compliance flags.
+- `Payment` - customer payment records.
+- `Wallet` and `WalletActivity` - vendor wallet account and movement history.
+- `Transaction` - webhook/monitoring transaction records.
+
+The app creates tables automatically on startup for the demo and applies lightweight column migrations in `app/main.py`.
+
+## API Routes
+
+### Vendors
+
+Router: `app/routers/vendors.py`
+
+Endpoints:
+
+- `POST /api/v1/vendors/` - create merchant profile.
+- `GET /api/v1/vendors/` - list merchants with latest verification score.
+- `GET /api/v1/vendors/{vendor_id}` - get merchant details with latest score.
+- `PATCH /api/v1/vendors/{vendor_id}/status` - approve/review/flag merchant.
+- `POST /api/vendors/login` - vendor portal login.
+- `GET /api/vendors/me` - current vendor profile.
+
+### Documents
+
+Router: `app/routers/documents.py`
+
+Endpoints:
+
+- `POST /api/v1/documents/upload/{vendor_id}` - upload one document.
+- `GET /api/v1/documents/{vendor_id}` - list uploaded documents.
+
+Supported document types:
+
+- `cac_certificate`
+- `utility_bill`
+- `directors_id`
+- `cac_form_cac2`
+- `cac_form_cac7`
+- `memart`
+- `bank_statement`
+- `business_registration`
+
+### Verification
+
+Router: `app/routers/verification.py`
+
+Endpoints:
+
+- `POST /api/v1/verify/{vendor_id}` - run verification.
+- `GET /api/v1/verify/{vendor_id}` - fetch latest verification.
+- `POST /api/v1/verify/{vendor_id}/rerun` - rerun verification.
+
+Verification calls the scorer pipeline in `app/services/scorer.py`.
+
+### Dashboard
+
+Router: `app/routers/dashboard.py`
+
+Endpoints:
+
+- `GET /api/v1/dashboard/stats`
+- `GET /api/v1/dashboard/queue`
+- `GET /api/v1/dashboard/recent`
+
+### Squad
+
+Router: `app/routers/squad.py`
+
+Endpoints:
+
+- `POST /api/v1/squad/create-merchant`
+- `POST /api/v1/squad/create-merchant/{vendor_id}`
+- `POST /api/v1/squad/webhook`
+
+This router connects merchant approval and webhook activity to Squad-style workflows.
+
+### Payments
+
+Router: `app/routers/payments.py`
+
+Endpoints:
+
+- `POST /api/payments/initiate`
+- `GET /api/payments`
+- `GET /api/payments/security-question`
+- `GET /api/payments/{transaction_ref}`
+- `POST /api/webhooks/squad`
+
+### Transfers
+
+Router: `app/routers/transfers.py`
+
+Endpoints:
+
+- `POST /api/transfers/account-lookup`
+- `POST /api/transfers`
+- `POST /api/transfers/requery`
+
+The backend verifies the vendor security answer before sending money.
+
+### Wallets
+
+Router: `app/routers/wallets.py`
+
+Endpoints:
+
+- `POST /api/wallets`
+- `GET /api/wallets/me`
+- `GET /api/wallets/me/transactions`
+
+### Transactions
+
+Router: `app/routers/transactions.py`
+
+Endpoints:
+
+- `GET /api/v1/transactions/`
+- `GET /api/v1/transactions/stats`
+
+These power the behavioural monitoring page.
+
+## Verification Pipeline
+
+The core verification flow is in `app/services/scorer.py`.
+
+High-level steps:
+
+1. Load uploaded vendor documents.
+2. Run OCR using `TrustGateOCR`.
+3. Combine extracted document text.
+4. Run identity checks using `verify_identity`.
+5. Run document consistency checks using `check_consistency`.
+6. Extract Nigerian business fields using `NigerianDocumentFieldExtractor`.
+7. Run agentic verification using `run_agentic_verification`.
+8. Run onboarding anomaly detection using `detect_anomalies`.
+9. Convert all flags to a common scoring format.
+10. Calculate weighted trust score and score breakdown.
+11. Store `Verification` and `Flag` rows.
+
+## Scoring Logic
+
+Trust score is weighted across four buckets:
+
+- Identity - BVN/NIN/director signals.
+- Documents - OCR quality and document consistency.
+- Business - RC, address, web presence, category and footprint signals.
+- Behaviour - anomaly and transaction behaviour signals.
+
+The scorer returns:
+
+- `trust_score`
+- `identity_score`
+- `document_score`
+- `business_score`
+- `behaviour_score`
+- `risk_level`
+- `verdict`
+- `summary`
+- `external_checks`
+
+Fraud-specific caps are included. For example, a Tier 2/Tier 3 business BVN that does not start with the expected verified-business prefix creates a critical signal and caps the score.
+
+## AI / Data Intelligence Layer
+
+TrustGate uses a hybrid intelligence architecture. It does not pretend to be a huge production fraud model trained on private banking data.
+
+Current intelligence sources:
+
+1. **OCR**
+   - Extracts text from uploaded documents.
+   - Supports image and PDF workflows.
+
+2. **NLP/document consistency**
+   - Extracts names, RC numbers, addresses, identity numbers, phones, dates, and business terms.
+   - Uses fuzzy matching and structured regex extraction.
+
+3. **Identity rules**
+   - Checks BVN/NIN structure.
+   - Checks business BVN pattern for higher-tier merchants.
+   - Checks tier-specific registration requirements.
+
+4. **Agentic verification**
+   - Plans and executes verification tools.
+   - Produces tool-level results and reviewer-friendly summaries.
+   - Prevents LLM advisory flags from inventing risk where the underlying tool did not fail.
+
+5. **Anomaly detection**
+   - Uses heuristic signals and Isolation Forest-style onboarding outlier detection.
+   - Flags unusual profiles for review prioritization.
+
+6. **Behavioural transaction monitoring**
+   - Scores how merchant behaviour changes after onboarding.
+
+## Behavioural Transaction Monitoring
+
+Service: `app/services/transaction_monitor.py`
+
+Signals monitored:
+
+- transaction velocity spike,
+- expected monthly volume breakout,
+- repeated round-number transactions,
+- single-customer revenue concentration,
+- odd-hour high-value activity,
+- rapid 24-hour volume accumulation.
+
+When risk is detected:
+
+- transaction is marked flagged,
+- flags are saved to the latest verification,
+- behaviour score and trust score are reduced,
+- serious stacked signals can flag/restrict the merchant.
+
+This supports the core product insight:
+
+> Merchant fraud can evolve after onboarding, so trust score must be dynamic.
+
+## Squad Integration
+
+Service: `app/services/squad_api.py`
+
+TrustGate uses Squad workflows for:
+
+- merchant/sub-merchant creation,
+- payment initiation,
+- payment verification,
+- webhook signature validation,
+- wallet operations,
+- account lookup,
+- transfers,
+- merchant status updates.
+
+Mock mode lets the demo run without live credentials:
+
+```env
+SQUAD_MOCK_MODE=true
+```
+
+In production, set credentials and disable mock mode.
+
+## Demo Data
+
+The frontend has two presets in `client/lib/merchantPresets.ts`:
+
+- **Legit Merchant** - Hubmart-style business profile with stronger public business signals.
+- **Fraud Merchant** - Sunshine-style profile with suspicious identity and document inconsistency.
+
+These presets are for presentation speed. The backend still processes them through the same vendor/document/verification flow.
+
+## Running Tests
+
+From `backend/`:
 
 ```bash
 python -m pytest tests -q
 ```
+
+If you only need a quick syntax check:
+
+```bash
+python -m py_compile app/main.py app/services/scorer.py app/services/transaction_monitor.py
+```
+
+
