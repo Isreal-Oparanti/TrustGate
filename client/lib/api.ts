@@ -23,11 +23,7 @@ import type {
 } from "@/types";
 import { getActiveVendorId } from "./session";
 
-// Route all API calls through the Next.js proxy (app/api/[...proxy]/route.ts).
-// This keeps the backend URL server-side only, eliminating HTTPS mixed-content errors
-// when the frontend is served over HTTPS (e.g. Amplify) and the backend is a separate host.
-// The proxy reads NEXT_PUBLIC_API_URL on the server and forwards the request.
-const BASE = "";
+const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 type ApiErrorBody = {
   detail?: unknown;
