@@ -1,6 +1,6 @@
 import datetime as dt
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.vendor import Vendor
@@ -31,7 +31,7 @@ def _attach_latest_verification(vendor: Vendor, db: Session) -> Vendor:
 def get_stats(db: Session = Depends(get_db)):
     today = dt.datetime.utcnow().date()
     total = db.query(func.count(Vendor.id)).scalar() or 0
-    total_today = db.query(func.count(Vendor.id)).filter(func.date(Vendor.created_at) == str(today)).scalar() or 0
+    total_today = db.query(func.count(Vendor.id)).filter(cast(Vendor.created_at, Date) == today).scalar() or 0
     approved = db.query(func.count(Vendor.id)).filter(Vendor.status == "approved").scalar() or 0
     pending_review = (
         db.query(func.count(Vendor.id))

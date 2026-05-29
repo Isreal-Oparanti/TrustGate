@@ -55,7 +55,7 @@ try:
             "account_number": "VARCHAR",
             "account_name": "VARCHAR",
             "director_name": "VARCHAR",
-            "expected_monthly_volume": "INTEGER",
+            "expected_monthly_volume": "BIGINT",
             "squad_account_id": "VARCHAR",
             "squad_merchant_id": "VARCHAR",
             "settlement_account_name": "VARCHAR",

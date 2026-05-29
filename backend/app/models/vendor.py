@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, BigInteger
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -25,7 +25,7 @@ class Vendor(Base):
     phone = Column(String, nullable=False)
     address = Column(String, nullable=False)
     director_name = Column(String, nullable=True)
-    expected_monthly_volume = Column(Integer, nullable=True)
+    expected_monthly_volume = Column(BigInteger, nullable=True)
     tier = Column(String, nullable=False, index=True)
     status = Column(String, nullable=False, default="pending", index=True)
     squad_account_id = Column(String, nullable=True, index=True)
