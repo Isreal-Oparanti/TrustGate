@@ -113,12 +113,19 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://main.d29g6zjd9nmzow.amplifyapp.com",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
 
 app.include_router(vendors.router, prefix="/api/vendors", tags=["Vendors"])
 app.include_router(wallets.router, prefix="/api/wallets", tags=["Wallets"])
