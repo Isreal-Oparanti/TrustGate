@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// The browser calls the proxy over HTTPS, and the proxy calls the backend over HTTP.
+// This completely avoids browser Mixed Content errors AND avoids needing an SSL cert on the backend.
+const API_BASE = "http://16.170.163.127:8000";
 
 async function proxy(request: NextRequest, context: { params: { proxy: string[] } }) {
   const path = context.params.proxy.join("/");
@@ -14,22 +16,29 @@ async function proxy(request: NextRequest, context: { params: { proxy: string[] 
     headers.set("content-type", request.headers.get("content-type") || "application/json");
   }
 
-  const body = ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer();
-  const response = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    cache: "no-store",
-  });
+  try {
+    const body = ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer();
+    const response = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      cache: "no-store",
+    });
 
-  const responseHeaders = new Headers(response.headers);
-  responseHeaders.delete("content-encoding");
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.delete("content-encoding");
 
-  return new NextResponse(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: responseHeaders,
-  });
+    return new NextResponse(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: "Proxy Error", message: error instanceof Error ? error.message : String(error), target },
+      { status: 500 }
+    );
+  }
 }
 
 export {
