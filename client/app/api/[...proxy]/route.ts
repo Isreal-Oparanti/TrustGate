@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Amplify Lambda → Nginx on port 80 → Docker on port 8000
-// Port 80 is open via Nginx; port 8000 is only accessible internally on EC2
-const API_BASE = "http://16.170.163.127";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function proxy(request: NextRequest, context: { params: { proxy: string[] } }) {
   const path = context.params.proxy.join("/");
