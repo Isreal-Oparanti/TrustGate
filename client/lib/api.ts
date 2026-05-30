@@ -160,7 +160,7 @@ function normalizeVerification(raw: Record<string, unknown>, vendorId: string): 
 
 export const api = {
   createVendor: async (data: VendorCreate) => {
-    const response = await request<VendorCreateResponse>("/api/vendors", {
+    const response = await request<VendorCreateResponse>("/api/vendors/", {
       method: "POST",
       body: JSON.stringify(data),
     });
