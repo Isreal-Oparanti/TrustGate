@@ -23,7 +23,7 @@ import type {
 } from "@/types";
 import { getActiveVendorId } from "./session";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BASE = "";
 
 type ApiErrorBody = {
   detail?: unknown;
