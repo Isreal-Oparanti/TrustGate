@@ -198,7 +198,7 @@ function pdfFilename(filename: string): string {
 }
 
 function apiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return "https://16.170.163.127.sslip.io";
 }
 
 function presetDocumentLines(preset: MerchantPreset, docType: string): string[] {
